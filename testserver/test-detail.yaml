@@ -1,0 +1,130 @@
+# 链式依赖测试配置
+protocol: http
+concurrency: 3
+requests: 50
+timeout: 10s
+
+host: http://localhost:3000
+
+headers:
+  Content-Type: application/json
+  User-Agent: go-stress-chain-test
+
+# 完整的用户操作流程
+apis:
+  # Step 1: 用户登录
+  - name: user_login
+    path: /api/login
+    method: POST
+    body: '{"username":"test_user","password":"secure_pass_123"}'
+    extractors:
+      # 提取 token
+      - name: auth_token
+        type: JSONPATH
+        jsonpath: $.token
+        default: ""
+      
+      # 提取 user_id
+      - name: user_id
+        type: JSONPATH
+        jsonpath: $.user_id
+        default: ""
+      
+      # 提取 session
+      - name: session
+        type: HEADER
+        header: X-Session-Id
+        default: ""
+    
+    verify:
+      - type: STATUS_CODE
+        expect: 200
+      - type: JSONPATH
+        jsonpath: $.success
+        expect: true
+
+  # Step 2: 查询用户信息（依赖登录）
+  - name: fetch_user_info
+    path: /api/user/info
+    method: GET
+    depends_on:
+      - user_login
+    
+    headers:
+      Authorization: "Bearer {{.user_login.auth_token}}"
+      X-Session-Id: "{{.user_login.session}}"
+    
+    extractors:
+      - name: username
+        type: JSONPATH
+        jsonpath: $.username
+        default: "unknown"
+      
+      - name: email
+        type: JSONPATH
+        jsonpath: $.email
+        default: ""
+    
+    verify:
+      - type: STATUS_CODE
+        expect: 200
+      - type: JSONPATH
+        jsonpath: $.user_id
+        expect: "{{.user_login.user_id}}"
+
+  # Step 3: 更新用户信息（依赖前两步）
+  - name: update_user_profile
+    path: /api/user/update
+    method: PUT
+    depends_on:
+      - user_login
+      - fetch_user_info
+    
+    headers:
+      Authorization: "Bearer {{.user_login.auth_token}}"
+      X-Session-Id: "{{.user_login.session}}"
+    
+    body: |
+      {
+        "email": "updated_{{.user_login.user_id}}@example.com",
+        "role": "premium_user"
+      }
+    
+    verify:
+      - type: STATUS_CODE
+        expect: 200
+      - type: JSONPATH
+        jsonpath: $.success
+        expect: true
+      - type: JSONPATH
+        jsonpath: $.data.user_id
+        expect: "{{.user_login.user_id}}"
+
+  # Step 4: 再次查询验证更新（依赖所有前序步骤）
+  - name: verify_update
+    path: /api/user/info
+    method: GET
+    depends_on:
+      - user_login
+      - fetch_user_info
+      - update_user_profile
+    
+    headers:
+      Authorization: "Bearer {{.user_login.auth_token}}"
+      X-Session-Id: "{{.user_login.session}}"
+    
+    verify:
+      - type: STATUS_CODE
+        expect: 200
+      - type: JSONPATH
+        jsonpath: $.user_id
+        expect: "{{.user_login.user_id}}"
+
+http:
+  keepalive: true
+  max_idle_conns: 50
+  idle_conn_timeout: 60s
+
+advanced:
+  realtime_port: 8090
+  enable_html_report: true

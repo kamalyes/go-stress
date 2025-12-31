@@ -1,0 +1,188 @@
+# 工单创建和消息发送链式测试配置
+protocol: http
+concurrency: 100
+requests: 100
+timeout: 15s
+
+host: http://localhost:8081
+
+headers:
+  Content-Type: application/json
+  Accept: application/json
+  Accept-Language: zh-cn
+  Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImFjY2Vzc19jb250cm9sIiwidHlwIjoiSldUIn0.eyJzdWIiOiJvd25lciIsImF1ZCI6WyIiXSwiZXhwIjoxNzY0NjgwNjMwfQ.X1EuwdSMjBkMvdmtFiikU1DlUARuERJD9NgFqgLOhsczLq18SMy4mnVFriafxG9z0RombkSNwFVC_OMZ2ZyhNSx_3u9hDTmMVeQsrZl0n_-LB2b2xou9kH4Su3nUuIzAqvXO0nzqx9syunmJwGnO3qKELI70LbKfc_5J3tEv8fDR00b8RaMmunAL3GkI_VefSNbyfnyPBJ2xXHBi7CT1NW9ok2-3qAa6Tedlc8Bjy9IEcWJF3zEs8wvXNU168A49BhnrmZzZEAcOdz8eVohzPP5qjJLgQ0vHUJJ6cCQKs7WA-MHC-Nisu7YMx4u-rvFxFKFnlQJa78__HB2sWgf97w
+  User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36
+  Cache-Control: no-cache
+  Pragma: no-cache
+  Origin: http://localhost:8081
+  Referer: http://localhost:8081/test/WSC_TEST.html
+  Proxy-Connection: keep-alive
+
+# 完整的工单创建和消息发送流程
+apis:
+  # Step 1: 创建工单
+  - name: create_ticket
+    path: /v1/tickets
+    method: POST
+    headers:
+      X-Nonce: "{{randomString 22}}"
+      X-Signature: "{{md5 (print .X-Nonce .X-Timestamp)}}"
+      X-Timestamp: "{{unixTime}}"
+    
+    body: |
+      {
+        "user_id": "{{md5 (print (unixNano) (randomString 16))}}",
+        "subject": "压测工单-{{unixNano}}-{{randomString 8}}",
+        "description": "压测工单描述-{{unixNano}}-{{randomString 16}}",
+        "category": "压测分类-{{randomString 6}}",
+        "priority": 2,
+        "metadata": {
+          "source": "stress_test",
+          "browser": "go-stress-test",
+          "timestamp": "{{now}}"
+        }
+      }
+    
+    extractors:
+      # 提取用户 ID
+      - name: user_id
+        type: JSONPATH
+        jsonpath: $.ticket.user_id
+        default: ""
+      
+      # 提取工单 ID
+      - name: ticket_id
+        type: JSONPATH
+        jsonpath: $.ticket.ticket_id
+        default: ""
+      
+      # 提取会话 ID
+      - name: session_id
+        type: JSONPATH
+        jsonpath: $.ticket.session_id
+        default: ""
+      
+      # 提取代理 ID
+      - name: agent_id
+        type: JSONPATH
+        jsonpath: $.ticket.agent_id
+        default: "owner"
+      
+      # 提取工单状态
+      - name: ticket_status
+        type: JSONPATH
+        jsonpath: $.ticket.status
+        default: ""
+    
+    verify:
+      - type: STATUS_CODE
+        expect: 200
+      
+      - type: JSONPATH
+        jsonpath: $.ticket.ticket_id
+        expect: ".+"
+        regex: true
+        description: "工单 ID 不能为空"
+      
+      - type: JSONPATH
+        jsonpath: $.ticket.user_id
+        expect: ".+"
+        regex: true
+        description: "验证用户 ID 不为空"
+      
+      - type: JSONPATH
+        jsonpath: $.ticket.session_id
+        expect: "^[a-z0-9]{32}$"
+        regex: true
+        description: "会话 ID 应该是 32 位的十六进制字符串"
+
+  # Step 2: 发送消息到工单会话（依赖工单创建）
+  - name: send_message
+    path: /v1/messages/send
+    method: POST
+    repeat: 50  # 每个工单发送50条消息
+    depends_on:
+      - create_ticket
+    
+    headers:
+      X-Nonce: "{{randomString 22}}"
+      X-Session-ID: "{{.create_ticket.session_id}}"
+      X-Signature: "{{md5 (print .X-Nonce .X-Timestamp)}}"
+      X-Timestamp: "{{unixTime}}"
+      X-User-ID: "{{.create_ticket.user_id}}"
+      X-User-Type: customer
+    
+    body: |
+      {
+        "session_id": "{{.create_ticket.session_id}}",
+        "sender_id": "{{.create_ticket.user_id}}",
+        "sender_type": 6,
+        "receiver_id": "{{.create_ticket.agent_id}}",
+        "receiver_type": 1,
+        "msg_type": 1,
+        "content": "工单[{{.create_ticket.ticket_id}}]测试消息-{{md5 "text"}}-{{unixNano}}",
+        "content_extra": {
+          "source": "stress_test",
+          "client_type": "go_stress_test",
+          "msg_type_name": "文本",
+          "ticket_id": "{{.create_ticket.ticket_id}}"
+        },
+        "seq_no": "{{unixNano}}",
+        "priority": 2,
+        "metadata": {
+          "client_ip": "127.0.0.1",
+          "user_agent": "go-stress/1.0",
+          "test_mode": "true",
+          "ticket_id": "{{.create_ticket.ticket_id}}"
+        }
+      }
+    
+    extractors:
+      # 提取消息 ID
+      - name: message_id
+        type: JSONPATH
+        jsonpath: $.data.message_id
+        default: ""
+      
+      # 提取消息状态
+      - name: message_status
+        type: JSONPATH
+        jsonpath: $.data.status
+        default: ""
+      
+      # 提取消息序列号
+      - name: seq_no
+        type: JSONPATH
+        jsonpath: $.data.seq_no
+        default: ""
+    
+    verify:
+      - type: STATUS_CODE
+        expect: 200
+        description: "消息发送成功"
+      
+      - type: JSONPATH
+        jsonpath: $.data.message_id
+        expect: ".+"
+        regex: true
+        description: "消息 ID 不能为空"
+      
+      - type: JSONPATH
+        jsonpath: $.data.session_id
+        expect: "{{.create_ticket.session_id}}"
+        description: "消息的会话 ID 应该与工单的会话 ID 一致"
+      
+      - type: JSONPATH
+        jsonpath: $.data.sender_id
+        expect: "{{.create_ticket.user_id}}"
+        description: "发送者 ID 应该与创建工单的用户 ID 一致"
+      
+      - type: JSONPATH
+        jsonpath: $.data.receiver_id
+        expect: "{{.create_ticket.agent_id}}"
+        description: "接收者 ID 应该是工单分配的代理"
+      
+      - type: JSONPATH
+        jsonpath: $.data.msg_type
+        expect: "MESSAGE_TYPE_TEXT"
+        description: "消息类型应该是文本消息"

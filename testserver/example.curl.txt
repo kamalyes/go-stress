@@ -1,0 +1,18 @@
+curl 'http://localhost:8081/v1/messages/send' \
+  -H 'Accept: application/json' \
+  -H 'Accept-Language: zh-CN,zh;q=0.9' \
+  -H 'Cache-Control: no-cache' \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: http://localhost:8081' \
+  -H 'Pragma: no-cache' \
+  -H 'Proxy-Connection: keep-alive' \
+  -H 'Referer: http://localhost:8081/test/WSC_TEST.html' \
+  -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36' \
+  -H 'X-Nonce: 2bk5a2cpyoxflm862icsdc' \
+  -H 'X-Session-ID: 08884d6d8d9fffa5456a359f67b48843' \
+  -H 'X-Signature: KIPKJDcIxQcfLz2UXBHTZDZUeRCCYaowQaCyqPN1kpI=' \
+  -H 'X-Timestamp: 1767160655' \
+  -H 'X-User-ID: 1991706697093091328' \
+  -H 'X-User-Type: customer' \
+  --data-raw '{"session_id":"08884d6d8d9fffa5456a359f67b48843","sender_id":"1991706697093091328","sender_type":6,"receiver_id":"owner","receiver_type":1,"msg_type":1,"content":"👤 【客户咨询】我的账号好像被盗了，刚才收到很多陌生的消费记录，麻烦帮我紧急处理一下，先把账号冻结保证资金安全 [时间: 2025/12/31 13:57:35.003] [ID: 1767160655003-bddankebh]","content_extra":{"source":"web_test","client_type":"html_test","msg_type_name":"文本"},"seq_no":"1767160655579","priority":2,"metadata":{"client_ip":"127.0.0.1","user_agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36","test_mode":"true"}}' \
+  --insecure
