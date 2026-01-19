@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2025-12-30 13:10:00
+ * @LastEditTime: 2026-01-24 00:55:15
  * @FilePath: \go-stress\statistics\realtime_server.go
  * @Description: 实时报告服务器
  *
@@ -14,21 +14,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
 // RealtimeServer 实时报告服务器
 type RealtimeServer struct {
 	collector   *Collector
+	builder     *ReportBuilder // 使用ReportBuilder构建报告
 	server      *http.Server
 	clients     map[chan []byte]bool
-	mu          sync.RWMutex
+	mu          *syncx.RWLock
 	startTime   time.Time
 	endTime     time.Time
 	isCompleted bool
@@ -41,37 +42,13 @@ type RealtimeServer struct {
 	pauseCancel context.CancelFunc
 }
 
-// RealtimeData 实时数据
-type RealtimeData struct {
-	Timestamp       int64   `json:"timestamp"`
-	TotalRequests   uint64  `json:"total_requests"`
-	SuccessRequests uint64  `json:"success_requests"`
-	FailedRequests  uint64  `json:"failed_requests"`
-	SuccessRate     float64 `json:"success_rate"`
-	QPS             float64 `json:"qps"`
-	AvgDuration     int64   `json:"avg_duration_ms"`
-	MinDuration     int64   `json:"min_duration_ms"`
-	MaxDuration     int64   `json:"max_duration_ms"`
-	Elapsed         int64   `json:"elapsed_seconds"`
-	IsCompleted     bool    `json:"is_completed"` // 是否已完成
-	IsPaused        bool    `json:"is_paused"`    // 是否已暂停
-	IsStopped       bool    `json:"is_stopped"`   // 是否已停止
-
-	// 错误统计
-	Errors map[string]uint64 `json:"errors,omitempty"`
-
-	// 状态码统计
-	StatusCodes map[int]uint64 `json:"status_codes,omitempty"`
-
-	// 最近的响应时间点（用于实时图表）
-	RecentDurations []int64 `json:"recent_durations,omitempty"`
-}
-
 // NewRealtimeServer 创建实时报告服务器
 func NewRealtimeServer(collector *Collector, port int) *RealtimeServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &RealtimeServer{
 		collector: collector,
+		builder:   NewReportBuilder(collector), // 初始化ReportBuilder
+		mu:        syncx.NewRWLock(),
 		clients:   make(map[chan []byte]bool),
 		startTime: time.Now(),
 		port:      port,
@@ -150,20 +127,18 @@ func (s *RealtimeServer) Stop() error {
 func (s *RealtimeServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
-	// 使用简化HTML模板，设置为实时模式
-	data := &HTMLReportData{
-		IsRealtime: true,
+	// 使用 HTMLFormatter 格式化实时报告
+	formatter := &HTMLFormatter{
+		IsRealtime:   true,
+		JSONFilename: "", // 实时模式不需要 JSON 文件
 	}
-
-	tmpl, err := template.New("realtime").Parse(reportHTML)
+	report := s.collectData()
+	htmlBytes, err := formatter.Format(report)
 	if err != nil {
-		http.Error(w, "模板解析失败", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	if err := tmpl.Execute(w, data); err != nil {
-		http.Error(w, "模板执行失败", http.StatusInternalServerError)
-	}
+	w.Write(htmlBytes)
 }
 
 // handleCSS 提供CSS样式文件
@@ -241,68 +216,17 @@ func (s *RealtimeServer) handleData(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// collectData 收集当前数据
-func (s *RealtimeServer) collectData() *RealtimeData {
-	snapshot := s.collector.GetSnapshot()
-
-	// 如果已完成，使用固定的总时间；否则使用当前经过的时间
-	var elapsed float64
+// collectData 收集当前数据 - 使用ReportBuilder简化逻辑
+func (s *RealtimeServer) collectData() *Report {
+	// 读取状态
 	s.mu.RLock()
 	isCompleted := s.isCompleted
 	isPaused := s.isPaused
 	isStopped := s.isStopped
-	if s.isCompleted {
-		elapsed = s.endTime.Sub(s.startTime).Seconds()
-	} else {
-		elapsed = time.Since(s.startTime).Seconds()
-	}
 	s.mu.RUnlock()
 
-	data := &RealtimeData{
-		Timestamp:       time.Now().Unix(),
-		TotalRequests:   snapshot.TotalRequests,
-		SuccessRequests: snapshot.SuccessRequests,
-		FailedRequests:  snapshot.FailedRequests,
-		AvgDuration:     snapshot.AvgDuration.Milliseconds(),
-		MinDuration:     snapshot.MinDuration.Milliseconds(),
-		MaxDuration:     snapshot.MaxDuration.Milliseconds(),
-		Elapsed:         int64(elapsed),
-		IsCompleted:     isCompleted,
-		IsPaused:        isPaused,
-		IsStopped:       isStopped,
-	}
-
-	if snapshot.TotalRequests > 0 && elapsed > 0 {
-		data.SuccessRate = float64(snapshot.SuccessRequests) / float64(snapshot.TotalRequests) * 100
-		data.QPS = float64(snapshot.TotalRequests) / elapsed
-	}
-
-	// 获取错误和状态码统计
-	s.collector.mu.Lock()
-	data.Errors = make(map[string]uint64)
-	for k, v := range s.collector.errors {
-		data.Errors[k] = v
-	}
-	data.StatusCodes = make(map[int]uint64)
-	for k, v := range s.collector.statusCodes {
-		data.StatusCodes[k] = v
-	}
-
-	// 获取最近20个响应时间用于实时图表
-	durationsLen := len(s.collector.durations)
-	if durationsLen > 0 {
-		start := 0
-		if durationsLen > 20 {
-			start = durationsLen - 20
-		}
-		data.RecentDurations = make([]int64, 0, 20)
-		for i := start; i < durationsLen; i++ {
-			data.RecentDurations = append(data.RecentDurations, s.collector.durations[i].Milliseconds())
-		}
-	}
-	s.collector.mu.Unlock()
-
-	return data
+	// 使用ReportBuilder构建实时报告（自动计算所有指标）
+	return s.builder.BuildRealtimeReport(s.startTime, isCompleted, isPaused, isStopped)
 }
 
 // handleDetails 处理请求明细API
@@ -314,7 +238,9 @@ func (s *RealtimeServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	offset := 0
 	limit := 100
-	onlyErrors := query.Get("errors") == "true"
+	// 支持 status 参数：all | success | failed | skipped
+	statusParam := query.Get("status")
+	statusFilter := ParseStatusFilter(statusParam) // 使用枚举
 
 	if o := query.Get("offset"); o != "" {
 		fmt.Sscanf(o, "%d", &offset)
@@ -328,14 +254,19 @@ func (s *RealtimeServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 		limit = 1000
 	}
 
-	details := s.collector.GetRequestDetails(offset, limit, onlyErrors)
-	total := s.collector.GetRequestDetailsCount(onlyErrors)
+	details := s.collector.GetRequestDetails(offset, limit, statusFilter)
+	detailsCount := s.collector.GetRequestDetailsCount(statusFilter)
 
+	// 直接从原子计数器读取统计数据（O(1)操作，无锁）
 	response := map[string]interface{}{
-		"total":   total,
-		"offset":  offset,
-		"limit":   limit,
-		"details": details,
+		"total":          detailsCount, // 已保存的详情记录数
+		"offset":         offset,
+		"limit":          limit,
+		"details":        details,
+		"total_requests": s.collector.totalRequests.Load(),   // 真实总请求数（原子读取）
+		"success_count":  s.collector.successRequests.Load(), // 真实成功数（原子读取）
+		"failed_count":   s.collector.failedRequests.Load(),  // 真实失败数（原子读取）
+		"skipped_count":  s.collector.skippedRequests.Load(), // 真实跳过数（原子读取）
 	}
 
 	json.NewEncoder(w).Encode(response)

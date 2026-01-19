@@ -11,22 +11,23 @@
 package statistics
 
 import (
-	"sort"
-	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/kamalyes/go-stress/types"
+	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-toolbox/pkg/idgen"
+	"github.com/kamalyes/go-toolbox/pkg/mathx"
+	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
 // RequestDetail 请求明细
 type RequestDetail struct {
-	ID         uint64        `json:"id"`
+	ID         string        `json:"id"`
 	Timestamp  time.Time     `json:"timestamp"`
 	Duration   time.Duration `json:"duration"`
 	StatusCode int           `json:"status_code"`
 	Success    bool          `json:"success"`
 	Skipped    bool          `json:"skipped"`
+	SkipReason string        `json:"skip_reason,omitempty"` // 跳过原因
 	GroupID    uint64        `json:"group_id"`
 	APIName    string        `json:"api_name,omitempty"`
 	Error      string        `json:"error,omitempty"`
@@ -44,194 +45,241 @@ type RequestDetail struct {
 	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
 
 	// 验证信息
-	Verifications []types.VerificationResult `json:"verifications,omitempty"`
-	
+	Verifications []VerificationResult `json:"verifications,omitempty"`
+
 	// 提取的变量
 	ExtractedVars map[string]string `json:"extracted_vars,omitempty"`
 }
 
 // Collector 统计收集器
 type Collector struct {
-	mu sync.Mutex
+	// 使用 syncx 原子类型
+	totalRequests   *syncx.Uint64
+	successRequests *syncx.Uint64
+	failedRequests  *syncx.Uint64
+	skippedRequests *syncx.Uint64 // 跳过请求计数器
 
-	totalRequests   uint64
-	successRequests uint64
-	failedRequests  uint64
-
+	// 时长统计（需要加锁）
+	mu            *syncx.RWLock
 	totalDuration time.Duration
 	minDuration   time.Duration
 	maxDuration   time.Duration
+	durations     []float64 // 用于计算百分位（转为秒）
 
 	totalSize float64
 
-	durations   []time.Duration // 用于计算百分位
-	errors      map[string]uint64
-	statusCodes map[int]uint64 // 状态码统计
+	// 使用 syncx.Map 替换 map + mutex
+	errors      *syncx.Map[string, uint64]
+	statusCodes *syncx.Map[int, uint64]
 
-	// 请求明细记录（最多保留最近10000条）
-	requestDetails []RequestDetail
-	maxDetails     int
+	// 统一的存储接口（支持 SQLite 和 Memory 两种实现）
+	storage DetailStorageInterface
+
+	// ID 生成器（使用 Snowflake 算法生成全局唯一ID）
+	idGenerator *idgen.SnowflakeGenerator
+
+	// 外部上报器（用于分布式模式）
+	externalReporter func(*RequestResult)
+	reporterMu       *syncx.RWLock
 }
 
-// NewCollector 创建收集器
+// NewCollector 创建收集器（默认内存模式）
 func NewCollector() *Collector {
+	return NewCollectorWithMemoryStorage("local")
+}
+
+// NewCollectorWithMemoryStorage 创建内存存储收集器
+func NewCollectorWithMemoryStorage(nodeID string) *Collector {
+	storage := NewMemoryStorage(nodeID, logger.Default)
+
 	return &Collector{
-		durations:      make([]time.Duration, 0, 10000),
-		errors:         make(map[string]uint64),
-		statusCodes:    make(map[int]uint64),
-		requestDetails: make([]RequestDetail, 0, 10000),
-		maxDetails:     10000,
-		minDuration:    time.Hour, // 初始化为一个大值
+		totalRequests:   syncx.NewUint64(0),
+		successRequests: syncx.NewUint64(0),
+		failedRequests:  syncx.NewUint64(0),
+		skippedRequests: syncx.NewUint64(0),
+		mu:              syncx.NewRWLock(),
+		reporterMu:      syncx.NewRWLock(),
+		durations:       make([]float64, 0, 10000),
+		errors:          syncx.NewMap[string, uint64](),
+		statusCodes:     syncx.NewMap[int, uint64](),
+		storage:         storage,
+		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
+		minDuration:     time.Hour,
+	}
+}
+
+// NewCollectorWithStorage 创建带 SQLite 存储的收集器
+func NewCollectorWithStorage(dbPath, nodeID string) *Collector {
+	storage, err := NewDetailStorage(dbPath, nodeID, logger.Default)
+	if err != nil {
+		logger.Default.Errorf("❌ 创建 SQLite 存储失败: %v，降级为内存模式", err)
+		return NewCollectorWithMemoryStorage(nodeID)
+	}
+
+	return &Collector{
+		totalRequests:   syncx.NewUint64(0),
+		successRequests: syncx.NewUint64(0),
+		failedRequests:  syncx.NewUint64(0),
+		skippedRequests: syncx.NewUint64(0),
+		mu:              syncx.NewRWLock(),
+		reporterMu:      syncx.NewRWLock(),
+		durations:       make([]float64, 0, 10000),
+		errors:          syncx.NewMap[string, uint64](),
+		statusCodes:     syncx.NewMap[int, uint64](),
+		storage:         storage,
+		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
+		minDuration:     time.Hour,
 	}
 }
 
 // Collect 收集单次请求结果
-func (c *Collector) Collect(result *types.RequestResult) {
-	atomic.AddUint64(&c.totalRequests, 1)
+func (c *Collector) Collect(result *RequestResult) {
+	// 调用外部上报器（如果设置了）
+	c.reporterMu.RLock()
+	if c.externalReporter != nil {
+		c.externalReporter(result)
+	}
+	c.reporterMu.RUnlock()
 
-	if result.Success {
-		atomic.AddUint64(&c.successRequests, 1)
+	// 原子操作，无需加锁
+	c.totalRequests.Add(1)
+
+	if result.Skipped {
+		// 跳过的请求单独计数，不计入成功或失败
+		c.skippedRequests.Add(1)
+	} else if result.Success {
+		// 只有非跳过的请求才计入成功
+		c.successRequests.Add(1)
 	} else {
-		atomic.AddUint64(&c.failedRequests, 1)
+		// 只有非跳过的请求才计入失败
+		c.failedRequests.Add(1)
 
-		// 记录错误
+		// 记录错误 - 使用 syncx.Map 线程安全
 		if result.Error != nil {
-			c.mu.Lock()
-			c.errors[result.Error.Error()]++
-			c.mu.Unlock()
+			errMsg := result.Error.Error()
+			old, _ := c.errors.LoadOrStore(errMsg, 0)
+			c.errors.Store(errMsg, old+1)
 		}
 	}
 
-	// 统计耗时
-	c.mu.Lock()
-	c.totalDuration += result.Duration
-	c.durations = append(c.durations, result.Duration)
-
-	if result.Duration < c.minDuration {
-		c.minDuration = result.Duration
-	}
-	if result.Duration > c.maxDuration {
-		c.maxDuration = result.Duration
-	}
-
-	c.totalSize += result.Size
-
-	// 统计状态码
+	// 统计状态码 - 使用 syncx.Map
 	if result.StatusCode > 0 {
-		c.statusCodes[result.StatusCode]++
+		old, _ := c.statusCodes.LoadOrStore(result.StatusCode, 0)
+		c.statusCodes.Store(result.StatusCode, old+1)
 	}
 
-	// 记录请求明细
-	detail := RequestDetail{
-		ID:              c.totalRequests,
-		Timestamp:       time.Now(),
-		Duration:        result.Duration,
-		StatusCode:      result.StatusCode,
-		Success:         result.Success,
-		Skipped:         result.Skipped,
-		GroupID:         result.GroupID,
-		APIName:         result.APIName,
-		Size:            result.Size,
-		URL:             result.URL,
-		Method:          result.Method,
-		Query:           result.Query,
-		Headers:         result.Headers,
-		Body:            result.Body,
-		ResponseBody:    result.ResponseBody,
-		ResponseHeaders: result.ResponseHeaders,
-		Verifications:   result.Verifications,
-		ExtractedVars:   result.ExtractedVars,
-	}
-	if result.Error != nil {
-		detail.Error = result.Error.Error()
-	}
+	// 统计耗时 - 使用 syncx.WithLock 包装
+	syncx.WithLock(c.mu, func() {
+		c.totalDuration += result.Duration
+		c.durations = append(c.durations, result.Duration.Seconds())
 
-	// 保持最多maxDetails条记录
-	if len(c.requestDetails) >= c.maxDetails {
-		// 删除最早的1000条，保留最新的
-		c.requestDetails = c.requestDetails[1000:]
-	}
-	c.requestDetails = append(c.requestDetails, detail)
+		c.minDuration = mathx.Min(c.minDuration, result.Duration)
+		c.maxDuration = mathx.Max(c.maxDuration, result.Duration)
 
-	c.mu.Unlock()
+		c.totalSize += result.Size
+	})
+
+	// 异步写入SQLite存储（如果启用）
+	if c.storage != nil {
+		detail := &RequestDetail{
+			ID:              c.idGenerator.GenerateRequestID(), // 使用 Snowflake 生成全局唯一ID
+			Timestamp:       time.Now(),
+			Duration:        result.Duration,
+			StatusCode:      result.StatusCode,
+			Success:         result.Success,
+			Skipped:         result.Skipped,
+			SkipReason:      result.SkipReason,
+			GroupID:         result.GroupID,
+			APIName:         result.APIName,
+			Size:            result.Size,
+			URL:             result.URL,
+			Method:          result.Method,
+			Query:           result.Query,
+			Headers:         result.Headers,
+			Body:            result.Body,
+			ResponseBody:    result.ResponseBody,
+			ResponseHeaders: result.ResponseHeaders,
+			Verifications:   result.Verifications,
+			ExtractedVars:   result.ExtractedVars,
+			Error:           mathx.IfEmpty(mathx.IF(result.Error != nil, result.Error.Error(), ""), ""),
+		}
+		c.storage.Write(detail)
+	}
 }
 
 // GenerateReport 生成统计报告
 func (c *Collector) GenerateReport(totalTime time.Duration) *Report {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return syncx.WithRLockReturnValue(c.mu, func() *Report {
+		// 使用 mathx 批量计算百分位
+		percentiles := mathx.Percentiles(c.durations, 50, 90, 95, 99)
 
-	// 排序耗时数据
-	sort.Slice(c.durations, func(i, j int) bool {
-		return c.durations[i] < c.durations[j]
+		// 使用 ToMap() 高级方法获取统计数据
+		errorsMap := c.errors.ToMap()
+		statusCodesMap := c.statusCodes.ToMap()
+
+		totalReqs := c.totalRequests.Load()
+		successReqs := c.successRequests.Load()
+
+		report := &Report{
+			TotalRequests:   totalReqs,
+			SuccessRequests: successReqs,
+			FailedRequests:  c.failedRequests.Load(),
+			TotalTime:       totalTime,
+			TotalSize:       c.totalSize,
+			Errors:          errorsMap,
+			StatusCodes:     statusCodesMap,
+			RequestDetails:  nil, // 详情数据从 SQLite 按需加载
+		}
+
+		if totalReqs > 0 {
+			// 使用 mathx.Percentage 计算成功率
+			report.SuccessRate = mathx.Percentage(successReqs, totalReqs)
+			report.AvgDuration = c.totalDuration / time.Duration(totalReqs)
+			report.QPS = float64(totalReqs) / totalTime.Seconds()
+		}
+
+		report.MinDuration = c.minDuration
+		report.MaxDuration = c.maxDuration
+
+		// 使用 mathx 计算的百分位
+		if len(c.durations) > 0 {
+			report.P50 = time.Duration(percentiles[50] * float64(time.Second))
+			report.P90 = time.Duration(percentiles[90] * float64(time.Second))
+			report.P95 = time.Duration(percentiles[95] * float64(time.Second))
+			report.P99 = time.Duration(percentiles[99] * float64(time.Second))
+		}
+
+		return report
 	})
-
-	report := &Report{
-		TotalRequests:   c.totalRequests,
-		SuccessRequests: c.successRequests,
-		FailedRequests:  c.failedRequests,
-		TotalTime:       totalTime,
-		TotalSize:       c.totalSize,
-		Errors:          c.errors,
-		StatusCodes:     c.statusCodes,
-		RequestDetails:  c.requestDetails,
-	}
-
-	if c.totalRequests > 0 {
-		report.SuccessRate = float64(c.successRequests) / float64(c.totalRequests) * 100
-		report.AvgDuration = c.totalDuration / time.Duration(c.totalRequests)
-		report.QPS = float64(c.totalRequests) / totalTime.Seconds()
-	}
-
-	report.MinDuration = c.minDuration
-	report.MaxDuration = c.maxDuration
-
-	// 计算百分位
-	if len(c.durations) > 0 {
-		report.P50 = c.percentile(0.50)
-		report.P90 = c.percentile(0.90)
-		report.P95 = c.percentile(0.95)
-		report.P99 = c.percentile(0.99)
-	}
-
-	return report
-}
-
-// percentile 计算百分位
-func (c *Collector) percentile(p float64) time.Duration {
-	if len(c.durations) == 0 {
-		return 0
-	}
-
-	index := int(float64(len(c.durations)-1) * p)
-	return c.durations[index]
 }
 
 // GetMetrics 获取实时指标
 func (c *Collector) GetMetrics() *Metrics {
 	return &Metrics{
-		TotalRequests:   atomic.LoadUint64(&c.totalRequests),
-		SuccessRequests: atomic.LoadUint64(&c.successRequests),
-		FailedRequests:  atomic.LoadUint64(&c.failedRequests),
+		TotalRequests:   c.totalRequests.Load(),
+		SuccessRequests: c.successRequests.Load(),
+		FailedRequests:  c.failedRequests.Load(),
 	}
 }
 
 // GetSnapshot 获取统计快照
 func (c *Collector) GetSnapshot() *Snapshot {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	totalReqs := c.totalRequests.Load()
 
 	snapshot := &Snapshot{
-		TotalRequests:   atomic.LoadUint64(&c.totalRequests),
-		SuccessRequests: atomic.LoadUint64(&c.successRequests),
-		FailedRequests:  atomic.LoadUint64(&c.failedRequests),
+		TotalRequests:   totalReqs,
+		SuccessRequests: c.successRequests.Load(),
+		FailedRequests:  c.failedRequests.Load(),
 		MinDuration:     c.minDuration,
 		MaxDuration:     c.maxDuration,
 		TotalSize:       c.totalSize,
 	}
 
-	if snapshot.TotalRequests > 0 {
-		snapshot.AvgDuration = c.totalDuration / time.Duration(snapshot.TotalRequests)
+	if totalReqs > 0 {
+		snapshot.AvgDuration = c.totalDuration / time.Duration(totalReqs)
 	}
 
 	return snapshot
@@ -239,66 +287,59 @@ func (c *Collector) GetSnapshot() *Snapshot {
 
 // GetStatusCodes 获取状态码统计
 func (c *Collector) GetStatusCodes() map[int]uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	codes := make(map[int]uint64, len(c.statusCodes))
-	for k, v := range c.statusCodes {
-		codes[k] = v
-	}
-	return codes
+	return c.statusCodes.ToMap()
 }
 
 // GetRequestDetails 获取请求明细（支持分页和筛选）
-func (c *Collector) GetRequestDetails(offset, limit int, onlyErrors bool) []RequestDetail {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	var filtered []RequestDetail
-	if onlyErrors {
-		// 只返回失败的请求
-		for i := len(c.requestDetails) - 1; i >= 0; i-- {
-			if !c.requestDetails[i].Success {
-				filtered = append(filtered, c.requestDetails[i])
-			}
+func (c *Collector) GetRequestDetails(offset, limit int, statusFilter StatusFilter) []*RequestDetail {
+	// 优先从 SQLite 存储读取
+	if c.storage != nil {
+		details, err := c.storage.Query(offset, limit, statusFilter)
+		if err == nil {
+			return details
 		}
-	} else {
-		// 返回所有请求（倒序，最新的在前面）
-		filtered = make([]RequestDetail, len(c.requestDetails))
-		for i := 0; i < len(c.requestDetails); i++ {
-			filtered[i] = c.requestDetails[len(c.requestDetails)-1-i]
-		}
+		logger.Default.Errorf("从存储读取失败: %v", err)
 	}
 
-	// 分页
-	if offset >= len(filtered) {
-		return []RequestDetail{}
-	}
-
-	end := offset + limit
-	if end > len(filtered) {
-		end = len(filtered)
-	}
-
-	return filtered[offset:end]
+	// 降级：返回空切片
+	return []*RequestDetail{}
 }
 
 // GetRequestDetailsCount 获取请求明细总数
-func (c *Collector) GetRequestDetailsCount(onlyErrors bool) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !onlyErrors {
-		return len(c.requestDetails)
-	}
-
-	count := 0
-	for _, detail := range c.requestDetails {
-		if !detail.Success {
-			count++
+func (c *Collector) GetRequestDetailsCount(statusFilter StatusFilter) int {
+	// 优先从 SQLite 存储读取
+	if c.storage != nil {
+		count, err := c.storage.Count(statusFilter)
+		if err == nil {
+			return count
 		}
+		logger.Default.Errorf("统计总数失败: %v", err)
 	}
-	return count
+
+	// 降级：返回0
+	return 0
+}
+
+// SetExternalReporter 设置外部上报器（用于分布式模式）
+func (c *Collector) SetExternalReporter(reporter func(*RequestResult)) {
+	c.reporterMu.Lock()
+	defer c.reporterMu.Unlock()
+	c.externalReporter = reporter
+}
+
+// ClearExternalReporter 清除外部上报器
+func (c *Collector) ClearExternalReporter() {
+	c.reporterMu.Lock()
+	defer c.reporterMu.Unlock()
+	c.externalReporter = nil
+}
+
+// Close 关闭收集器，释放资源
+func (c *Collector) Close() error {
+	if c.storage != nil {
+		return c.storage.Close()
+	}
+	return nil
 }
 
 // Snapshot 统计快照（用于实时显示）

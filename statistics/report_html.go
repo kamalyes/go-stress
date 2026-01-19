@@ -56,33 +56,10 @@ const reportHTML = `<!DOCTYPE html>
             </label>
             <div class="file-name" id="fileName"></div>
         </div>
-        
-        <div class="info-bar" id="infoBar" style="display: none;">
-            <div class="info-item">
-                <div class="info-label">生成时间</div>
-                <div class="info-value" id="generate-time">-</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">测试时长</div>
-                <div class="info-value" id="test-duration">-</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">总请求数</div>
-                <div class="info-value" id="static-total-requests">-</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">成功率</div>
-                <div class="info-value" id="static-success-rate">-</div>
-            </div>
-            <div class="info-item">
-                <div class="info-label">QPS</div>
-                <div class="info-value" id="static-qps">-</div>
-            </div>
-        </div>
         {{end}}
         
-        {{if .IsRealtime}}
-        <div class="metrics-grid">
+        <!-- 统一的指标卡片（实时和静态都使用） -->
+        <div class="metrics-grid" id="metricsGrid" {{if not .IsRealtime}}style="display: none;"{{end}}>
             <div class="metric-card">
                 <div class="metric-label">总请求数</div>
                 <div class="metric-value" id="total-requests">0</div>
@@ -107,13 +84,19 @@ const reportHTML = `<!DOCTYPE html>
                 <div class="metric-label">平均响应时间</div>
                 <div class="metric-value" id="avg-duration">0ms</div>
             </div>
+            {{if .IsRealtime}}
             <div class="metric-card">
                 <div class="metric-label">运行时间</div>
                 <div class="metric-value" id="elapsed">0s</div>
             </div>
+            {{else}}
+            <div class="metric-card">
+                <div class="metric-label">测试时长</div>
+                <div class="metric-value" id="test-duration">0s</div>
+            </div>
+            {{end}}
         </div>
-        {{end}}
-        
+                
         <div class="content">
             <div class="section">
                 <div class="section-title">📈 实时图表</div>

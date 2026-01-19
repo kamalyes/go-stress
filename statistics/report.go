@@ -13,45 +13,52 @@ package statistics
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-toolbox/pkg/units"
 )
 
-// Report 统计报告
+// Report 统计报告 - 统一的数据结构，同时支持静态和实时报告
 type Report struct {
 	// 基础统计
-	TotalRequests   uint64
-	SuccessRequests uint64
-	FailedRequests  uint64
-	SuccessRate     float64
+	TotalRequests   uint64  `json:"total_requests"`
+	SuccessRequests uint64  `json:"success_requests"`
+	FailedRequests  uint64  `json:"failed_requests"`
+	SuccessRate     float64 `json:"success_rate"` // 百分比 0-100
 
 	// 时间统计
-	TotalTime   time.Duration
-	MinDuration time.Duration
-	MaxDuration time.Duration
-	AvgDuration time.Duration
+	TotalTime   time.Duration `json:"total_time"`
+	MinDuration time.Duration `json:"min_duration"`
+	MaxDuration time.Duration `json:"max_duration"`
+	AvgDuration time.Duration `json:"avg_duration"`
 
 	// 百分位统计
-	P50 time.Duration
-	P90 time.Duration
-	P95 time.Duration
-	P99 time.Duration
+	P50 time.Duration `json:"p50"`
+	P90 time.Duration `json:"p90"`
+	P95 time.Duration `json:"p95"`
+	P99 time.Duration `json:"p99"`
 
 	// 性能指标
-	QPS       float64
-	TotalSize float64
+	QPS       float64 `json:"qps"`
+	TotalSize float64 `json:"total_size"` // 字节数
 
 	// 错误统计
-	Errors map[string]uint64
+	Errors map[string]uint64 `json:"errors,omitempty"`
 
 	// 状态码统计
-	StatusCodes map[int]uint64
+	StatusCodes map[int]uint64 `json:"status_codes,omitempty"`
 
-	// 请求明细
-	RequestDetails []RequestDetail
+	// 请求明细（静态报告用，实时报告不加载）
+	RequestDetails []*RequestDetail `json:"request_details,omitempty"`
+
+	// === 实时报告专用字段 ===
+	Timestamp       int64   `json:"timestamp,omitempty"`        // Unix时间戳
+	Elapsed         int64   `json:"elapsed_seconds,omitempty"`  // 已耗时（秒）
+	IsCompleted     bool    `json:"is_completed,omitempty"`     // 是否完成
+	IsPaused        bool    `json:"is_paused,omitempty"`        // 是否暂停
+	IsStopped       bool    `json:"is_stopped,omitempty"`       // 是否停止
+	RecentDurations []int64 `json:"recent_durations,omitempty"` // 最近响应时间（毫秒）用于实时图表
 }
 
 // Print 打印报告（使用单个多列表格）
@@ -143,35 +150,6 @@ func (r *Report) Print() {
 	logger.Default.Info("")
 }
 
-// ToJSON 导出为JSON
-func (r *Report) ToJSON() string {
-	data := map[string]interface{}{
-		"total_requests":   r.TotalRequests,
-		"success_requests": r.SuccessRequests,
-		"failed_requests":  r.FailedRequests,
-		"success_rate":     r.SuccessRate,
-		"qps":              r.QPS,
-		"total_size":       r.TotalSize,
-		"total_time_ms":    r.TotalTime.Milliseconds(),
-		"min_duration_ms":  r.MinDuration.Milliseconds(),
-		"max_duration_ms":  r.MaxDuration.Milliseconds(),
-		"avg_duration_ms":  r.AvgDuration.Milliseconds(),
-		"p50_ms":           r.P50.Milliseconds(),
-		"p90_ms":           r.P90.Milliseconds(),
-		"p95_ms":           r.P95.Milliseconds(),
-		"p99_ms":           r.P99.Milliseconds(),
-		"errors":           r.Errors,
-		"status_codes":     r.StatusCodes,
-		"request_details":  r.RequestDetails,
-	}
-
-	bytes, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return "{}"
-	}
-	return string(bytes)
-}
-
 // Summary 返回简短摘要
 func (r *Report) Summary() string {
 	return fmt.Sprintf(
@@ -183,8 +161,29 @@ func (r *Report) Summary() string {
 	)
 }
 
-// SaveToFile 保存报告到文件
-func (r *Report) SaveToFile(filename string) error {
-	content := r.ToJSON()
-	return os.WriteFile(filename, []byte(content), 0644)
+// MarshalJSON 自定义JSON序列化，将time.Duration转换为毫秒
+func (r *Report) MarshalJSON() ([]byte, error) {
+	type Alias Report
+	return json.Marshal(&struct {
+		*Alias
+		// 添加毫秒格式的字段供前端使用
+		AvgDurationMs float64 `json:"avg_duration_ms"`
+		MinDurationMs float64 `json:"min_duration_ms"`
+		MaxDurationMs float64 `json:"max_duration_ms"`
+		P50Ms         float64 `json:"p50_ms"`
+		P90Ms         float64 `json:"p90_ms"`
+		P95Ms         float64 `json:"p95_ms"`
+		P99Ms         float64 `json:"p99_ms"`
+		TotalTimeMs   float64 `json:"total_time_ms"`
+	}{
+		Alias:         (*Alias)(r),
+		AvgDurationMs: float64(r.AvgDuration.Microseconds()) / 1000.0,
+		MinDurationMs: float64(r.MinDuration.Microseconds()) / 1000.0,
+		MaxDurationMs: float64(r.MaxDuration.Microseconds()) / 1000.0,
+		P50Ms:         float64(r.P50.Microseconds()) / 1000.0,
+		P90Ms:         float64(r.P90.Microseconds()) / 1000.0,
+		P95Ms:         float64(r.P95.Microseconds()) / 1000.0,
+		P99Ms:         float64(r.P99.Microseconds()) / 1000.0,
+		TotalTimeMs:   float64(r.TotalTime.Microseconds()) / 1000.0,
+	})
 }

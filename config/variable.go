@@ -23,20 +23,22 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"text/template"
 	"time"
 
+	"github.com/kamalyes/go-toolbox/pkg/convert"
+	"github.com/kamalyes/go-toolbox/pkg/mathx"
 	"github.com/kamalyes/go-toolbox/pkg/netx"
 	"github.com/kamalyes/go-toolbox/pkg/osx"
 	"github.com/kamalyes/go-toolbox/pkg/random"
 	"github.com/kamalyes/go-toolbox/pkg/stringx"
+	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
 // VariableResolver 变量解析器
 type VariableResolver struct {
 	variables map[string]any
-	sequence  uint64
+	sequence  *syncx.Uint64 // 使用 syncx.Uint64
 	funcMap   template.FuncMap
 }
 
@@ -44,7 +46,7 @@ type VariableResolver struct {
 func NewVariableResolver() *VariableResolver {
 	v := &VariableResolver{
 		variables: make(map[string]any),
-		sequence:  0,
+		sequence:  syncx.NewUint64(0), // 使用 syncx
 	}
 
 	v.funcMap = template.FuncMap{
@@ -55,7 +57,7 @@ func NewVariableResolver() *VariableResolver {
 
 		// 序列号
 		"seq": func() uint64 {
-			return atomic.AddUint64(&v.sequence, 1)
+			return v.sequence.Add(1) // 使用 syncx
 		},
 
 		// 时间函数
@@ -273,7 +275,7 @@ func NewVariableResolver() *VariableResolver {
 			return string(b)
 		},
 
-		// 数学函数
+		// 数学函数 - 使用 mathx 模块
 		"add": func(a, b int) int {
 			return a + b
 		},
@@ -296,22 +298,13 @@ func NewVariableResolver() *VariableResolver {
 			return a % b
 		},
 		"max": func(a, b int) int {
-			if a > b {
-				return a
-			}
-			return b
+			return mathx.Max(a, b) // 使用 mathx
 		},
 		"min": func(a, b int) int {
-			if a < b {
-				return a
-			}
-			return b
+			return mathx.Min(a, b) // 使用 mathx
 		},
 		"abs": func(n int) int {
-			if n < 0 {
-				return -n
-			}
-			return n
+			return mathx.Abs(n) // 使用 mathx
 		},
 		"pow": func(x, y float64) float64 {
 			return math.Pow(x, y)
@@ -355,17 +348,17 @@ func NewVariableResolver() *VariableResolver {
 			return value
 		},
 
-		// 类型转换
+		// 类型转换 - 使用 convert 模块
 		"toString": func(v any) string {
 			return fmt.Sprintf("%v", v)
 		},
 		"toInt": func(s string) int {
-			i, _ := strconv.Atoi(s)
-			return i
+			result, _ := convert.MustIntT[int](s, nil)
+			return result
 		},
 		"toFloat": func(s string) float64 {
-			f, _ := strconv.ParseFloat(s, 64)
-			return f
+			result, _ := convert.MustIntT[float64](s, nil)
+			return result
 		},
 
 		// 变量引用
@@ -424,7 +417,7 @@ func (v *VariableResolver) buildContext() map[string]any {
 	return map[string]any{
 		"Env":       envMap(),
 		"Variables": v.variables,
-		"Seq":       atomic.AddUint64(&v.sequence, 1),
+		"Seq":       v.sequence.Add(1),
 		"Time": map[string]any{
 			"Unix":      time.Now().Unix(),
 			"Timestamp": time.Now().UnixMilli(),

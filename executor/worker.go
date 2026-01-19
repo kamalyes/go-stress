@@ -220,23 +220,30 @@ func (w *Worker) executeRequest(ctx context.Context) {
 			apiCfg = w.replaceExtractedVarsLocal(apiCfg)
 			apiCfg = w.resolveAPIConfigVariables(apiCfg)
 
+			// 找出具体失败的依赖API
+			failedDeps := w.getFailedDependencies(apiCfg.Name)
+			skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
+
 			// 跳过该API，记录完整配置但标记为跳过
 			result := &types.RequestResult{
 				Success:    false,
 				Skipped:    true,
+				SkipReason: skipReason,
 				GroupID:    0, // 非依赖模式下 GroupID 为 0
 				APIName:    apiCfg.Name,
 				StatusCode: 0,
 				Duration:   0,
-				Error:      fmt.Errorf("跳过:依赖的API失败"),
+				Error:      fmt.Errorf("%s", skipReason),
 				Timestamp:  time.Now(),
 				URL:        apiCfg.URL,
 				Method:     apiCfg.Method,
 				Headers:    apiCfg.Headers,
 				Body:       apiCfg.Body,
+				// 记录配置的验证规则（虽未执行，但有助于排查）
+				Verifications: w.buildPlannedVerifications(apiCfg),
 			}
 			w.collector.Collect(result)
-			logger.Default.Warnf("⏭️  Worker %d: 跳过 API [%s]，因为依赖的 API 失败", w.id, apiCfg.Name)
+			logger.Default.Warnf("⏭️  Worker %d: 跳过 API [%s]，%s", w.id, apiCfg.Name, skipReason)
 			return
 		}
 
@@ -348,23 +355,30 @@ func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resol
 		apiCfg = w.replaceExtractedVarsLocal(apiCfg)
 		apiCfg = w.resolveAPIConfigVariables(apiCfg)
 
+		// 找出具体失败的依赖API
+		failedDeps := w.getFailedDependencies(apiName)
+		skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
+
 		// 跳过该API，记录完整配置但标记为跳过
 		result := &types.RequestResult{
 			Success:    false,
 			Skipped:    true,
+			SkipReason: skipReason,
 			GroupID:    groupID,
 			APIName:    apiName,
 			StatusCode: 0,
 			Duration:   0,
-			Error:      fmt.Errorf("跳过：依赖的API失败"),
+			Error:      fmt.Errorf("%s", skipReason),
 			Timestamp:  time.Now(),
 			URL:        apiCfg.URL,
 			Method:     apiCfg.Method,
 			Headers:    apiCfg.Headers,
 			Body:       apiCfg.Body,
+			// 记录配置的验证规则
+			Verifications: w.buildPlannedVerifications(apiCfg),
 		}
 		w.collector.Collect(result)
-		logger.Default.Warnf("⏭️  Worker %d: 跳过 API [%s]，因为依赖的 API 失败", w.id, apiName)
+		logger.Default.Warnf("⏭️  Worker %d: 跳过 API [%s]，%s", w.id, apiName, skipReason)
 		return
 	}
 
@@ -560,6 +574,51 @@ func (w *Worker) shouldSkipAPI(apiName string) bool {
 	}
 
 	return false
+}
+
+// getFailedDependencies 获取失败的依赖API列表
+func (w *Worker) getFailedDependencies(apiName string) []string {
+	if !w.apiSelector.HasDependencies() {
+		return nil
+	}
+
+	resolver := w.apiSelector.GetDependencyResolver()
+	if resolver == nil {
+		return nil
+	}
+
+	api := resolver.GetAPI(apiName)
+	if api == nil {
+		return nil
+	}
+
+	var failedDeps []string
+	for _, dep := range api.DependsOn {
+		if w.depContext.failedAPIs[dep] {
+			failedDeps = append(failedDeps, dep)
+		}
+	}
+	return failedDeps
+}
+
+// buildPlannedVerifications 构建计划的验证规则（虽未执行，但记录配置）
+func (w *Worker) buildPlannedVerifications(apiCfg *APIRequestConfig) []types.VerificationResult {
+	if len(apiCfg.Verify) == 0 {
+		return nil
+	}
+
+	var verifications []types.VerificationResult
+	for _, v := range apiCfg.Verify {
+		verifications = append(verifications, types.VerificationResult{
+			Type:    v.Type,
+			Success: false, // 未执行
+			Skipped: true,  // 标记为跳过
+			Message: "未执行（请求被跳过）",
+			Expect:  fmt.Sprintf("%v", v.Expect),
+			Actual:  "-",
+		})
+	}
+	return verifications
 }
 
 // replaceVars 替换字符串中的变量占位符 {{.apiName.varName}}

@@ -12,11 +12,15 @@ package protocol
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
@@ -54,9 +58,50 @@ func (g *GRPCClient) Connect(ctx context.Context) error {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
-	// TODO: 支持TLS配置
+	// 支持 TLS 配置
 	if g.config.GRPC.TLS != nil && g.config.GRPC.TLS.Enabled {
-		// 添加TLS配置
+		var tlsConfig *tls.Config
+
+		if g.config.GRPC.TLS.InsecureSkipVerify {
+			// 不验证服务器证书（仅用于测试环境）
+			tlsConfig = &tls.Config{
+				InsecureSkipVerify: true,
+			}
+		} else {
+			// 加载 CA 证书
+			if g.config.GRPC.TLS.CAFile != "" {
+				certPool := x509.NewCertPool()
+				ca, err := os.ReadFile(g.config.GRPC.TLS.CAFile)
+				if err != nil {
+					return fmt.Errorf("读取 CA 证书失败: %w", err)
+				}
+				if !certPool.AppendCertsFromPEM(ca) {
+					return fmt.Errorf("添加 CA 证书失败")
+				}
+				tlsConfig = &tls.Config{
+					RootCAs: certPool,
+				}
+			}
+
+			// 加载客户端证书（双向认证）
+			if g.config.GRPC.TLS.CertFile != "" && g.config.GRPC.TLS.KeyFile != "" {
+				cert, err := tls.LoadX509KeyPair(g.config.GRPC.TLS.CertFile, g.config.GRPC.TLS.KeyFile)
+				if err != nil {
+					return fmt.Errorf("加载客户端证书失败: %w", err)
+				}
+				if tlsConfig == nil {
+					tlsConfig = &tls.Config{}
+				}
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+		}
+
+		if tlsConfig != nil {
+			// 替换为 TLS 凭证
+			opts = []grpc.DialOption{
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+			}
+		}
 	}
 
 	conn, err := grpc.NewClient(g.config.URL, opts...)

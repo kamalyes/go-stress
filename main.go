@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2025-12-31 19:52:34
+ * @LastEditTime: 2026-01-25 11:07:47
  * @FilePath: \go-stress\main.go
  * @Description: 压测工具主入口
  *
@@ -26,6 +26,8 @@ import (
 	"github.com/kamalyes/go-stress/executor"
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/types"
+	"github.com/kamalyes/go-toolbox/pkg/osx"
+	"github.com/kamalyes/go-toolbox/pkg/units"
 )
 
 var (
@@ -59,7 +61,11 @@ var (
 	verbose  bool
 
 	// 报告配置
-	reportPrefix string // 报告文件名前缀
+	reportPrefix string            // 报告文件名前缀
+	storageMode  types.StorageMode // 存储模式 (memory/db)
+
+	// 内存限制
+	maxMemory string // 内存使用阈值
 )
 
 // arrayFlags 数组flag
@@ -81,6 +87,9 @@ type reportFile struct {
 }
 
 func init() {
+	// 设置默认值
+	storageMode = types.StorageModeMemory
+
 	// 基础参数
 	flag.StringVar(&configFile, "config", "", "配置文件路径 (yaml/json)")
 	flag.StringVar(&curlFile, "curl", "", "curl命令文件路径")
@@ -112,6 +121,10 @@ func init() {
 
 	// 报告配置
 	flag.StringVar(&reportPrefix, "report-prefix", "stress-report", "报告文件名前缀")
+	flag.Var(&storageMode, "storage", "存储模式 (memory:内存模式 | sqlite:持久化到SQLite文件)")
+
+	// 内存限制
+	flag.StringVar(&maxMemory, "max-memory", "", "内存使用阈值，超过后自动停止测试 (如: 1GB, 512MB, 2048KB)")
 }
 
 func main() {
@@ -170,8 +183,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 创建执行器
-	exec, err := executor.NewExecutor(cfg)
+	// 创建执行器（根据存储模式选择）
+	var exec *executor.Executor
+
+	switch storageMode {
+	case types.StorageModeMemory:
+		// 内存模式：高速、无限制、不持久化
+		logger.Default.Info("💾 存储模式: 内存 (高速、无限制、不持久化)")
+		exec, err = executor.NewExecutorWithMemoryStorage(cfg)
+
+	case types.StorageModeSQLite:
+		// SQLite 模式：持久化、无限制、可查询
+		reportDir := filepath.Join(reportPrefix, fmt.Sprintf("%d", time.Now().Unix()))
+		if err := os.MkdirAll(reportDir, os.ModePerm); err != nil {
+			logger.Default.Fatalf("❌ 创建报告目录失败: %v", err)
+		}
+		dbPath := filepath.Join(reportDir, "details.db")
+		logger.Default.Info("💾 存储模式: SQLite (持久化、无限制、可查询)")
+		logger.Default.Info("💾 数据库路径: %s", dbPath)
+		exec, err = executor.NewExecutorWithSQLiteStorage(cfg, dbPath)
+
+	default:
+		logger.Default.Fatalf("❌ 未知的存储模式: %s (支持: %s, %s)",
+			storageMode, types.StorageModeMemory, types.StorageModeSQLite)
+	}
+
 	if err != nil {
 		logger.Default.Fatalf("❌ 创建执行器失败: %v", err)
 	}
@@ -190,14 +226,74 @@ func main() {
 		cancel()
 	}()
 
+	// 启动内存监控（如果配置了阈值）
+	if maxMemory != "" {
+		threshold, err := units.ParseBytes(maxMemory)
+		if err != nil {
+			logger.Default.Warnf("⚠️  内存阈值格式错误: %v,将忽略内存监控", err)
+		} else {
+			logger.Default.Infof("🔍 启动内存监控，阈值: %s (%d MB)", maxMemory, threshold/(1024*1024))
+
+			// 使用高级内存监控器
+			monitor := osx.NewAdvancedMonitor().
+				AddThreshold(osx.LevelWarning, threshold*80/100). // 80% 警告
+				AddThreshold(osx.LevelCritical, threshold).       // 100% 严重
+				SetMetricType(osx.MetricAlloc).
+				SetCheckOnce(false).
+				SetMaxHistory(200).
+				EnableGrowthCheck(20.0, 30*time.Second). // 30秒内增长超过20%告警
+				OnWarning(func(snapshot osx.Snapshot) {
+					logger.Default.Warnf("[⚠️  警告] 内存使用: %s / %s (%.1f%%), Goroutines: %d",
+						units.FormatBytes(snapshot.Alloc),
+						maxMemory,
+						float64(snapshot.Alloc)/float64(threshold)*100,
+						snapshot.Goroutines)
+				}).
+				OnCritical(func(snapshot osx.Snapshot) {
+					logger.Default.Warnf("\n[🚨 严重] 内存使用超过阈值: %s / %s (%.1f%%)",
+						units.FormatBytes(snapshot.Alloc),
+						maxMemory,
+						float64(snapshot.Alloc)/float64(threshold)*100)
+					logger.Default.Warnf("  GC次数: %d, Goroutines: %d", snapshot.NumGC, snapshot.Goroutines)
+					logger.Default.Warn("🛑 自动停止测试任务...")
+					cancel()
+				}).
+				OnGrowthAlert(func(rate osx.GrowthRate, snapshot osx.Snapshot) {
+					logger.Default.Warnf("[📈 增长告警] 增长率: %.2f%%, 绝对增长: %s, 时间窗口: %v",
+						rate.Percentage,
+						units.FormatBytes(uint64(rate.Absolute)),
+						rate.Duration)
+				}).
+				OnCheck(func(snapshot osx.Snapshot) {
+					logger.Default.Debugf("📊 内存监控 - Alloc: %s, Sys: %s, Goroutines: %d, GC: %d",
+						units.FormatBytes(snapshot.Alloc),
+						units.FormatBytes(snapshot.Sys),
+						snapshot.Goroutines,
+						snapshot.NumGC)
+				})
+
+			go monitor.Start(ctx, 5*time.Second)
+		}
+	}
+
 	// 执行压测
 	report, err := exec.Run(ctx)
 	if err != nil {
-		logger.Default.Fatalf("❌ 压测执行失败: %v", err)
+		// 如果是用户中断（context canceled），不视为错误
+		if err.Error() == "执行压测失败: context canceled" ||
+			strings.Contains(err.Error(), "context canceled") {
+			logger.Default.Warn("⚠️  用户已中断压测")
+			// 继续执行后续的报告生成和数据保存
+		} else {
+			// 其他错误直接退出
+			logger.Default.Fatalf("❌ 压测执行失败: %v", err)
+		}
 	}
 
 	// 打印报告
-	report.Print()
+	if report != nil {
+		report.Print()
+	}
 
 	// 清理旧报告（保留最近10个）
 	cleanOldReports(10)
@@ -207,17 +303,30 @@ func main() {
 
 	if err := os.MkdirAll(reportDir, os.ModePerm); err != nil {
 		logger.Default.Warnf("⚠️  创建报告目录失败: %v", err)
+		// 即使创建目录失败，也要关闭存储
+		if err := exec.GetCollector().Close(); err != nil {
+			logger.Default.Warnf("⚠️  关闭存储失败: %v", err)
+		}
 		return
 	}
 
 	// 生成并保存HTML报告（会自动生成配套的 JSON 文件）
 	htmlReportFile := filepath.Join(reportDir, "index.html")
-	totalDuration := report.TotalTime
+	totalDuration := time.Duration(0)
+	if report != nil {
+		totalDuration = report.TotalTime
+	}
 	if err := exec.GetCollector().GenerateHTMLReport(totalDuration, htmlReportFile); err != nil {
 		logger.Default.Warnf("⚠️  生成HTML报告失败: %v", err)
 	} else {
 		logger.Default.Info("🌐 在浏览器中打开查看详细图表: file:///%s", htmlReportFile)
 	}
+
+	// 确保所有数据都写入存储
+	if err := exec.GetCollector().Close(); err != nil {
+		logger.Default.Warnf("⚠️  关闭存储失败: %v", err)
+	}
+
 	// 等待用户查看报告后手动退出
 	logger.Default.Info("\n💡 提示: 实时报告服务器仍在运行")
 	logger.Default.Info("   访问 http://localhost:8088 查看实时报告")

@@ -12,9 +12,9 @@ package verify
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/kamalyes/go-stress/types"
+	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
 // Verifier 验证器接口
@@ -25,11 +25,12 @@ type Verifier interface {
 
 // Registry 验证器注册中心
 type Registry struct {
-	mu        sync.RWMutex
+	mu        *syncx.RWLock
 	verifiers map[types.VerifyType]Verifier
 }
 
 var globalRegistry = &Registry{
+	mu:        syncx.NewRWLock(),
 	verifiers: make(map[types.VerifyType]Verifier),
 }
 

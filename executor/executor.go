@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/kamalyes/go-stress/config"
@@ -27,6 +28,12 @@ import (
 	"github.com/kamalyes/go-toolbox/pkg/retry"
 )
 
+// StatsReporter 统计上报接口（用于分布式模式）
+type StatsReporter interface {
+	Add(result *types.RequestResult)
+	SetTaskID(taskID string)
+}
+
 // Executor 压测执行器（核心编排器）
 // 职责：
 // 1. 组装各个组件（连接池、中间件、调度器）
@@ -38,11 +45,30 @@ type Executor struct {
 	scheduler      *Scheduler
 	pool           *ClientPool
 	realtimeServer *statistics.RealtimeServer
+	// 分布式相关
+	statsReporter StatsReporter // 用于分布式模式下的统计上报
+	isDistributed bool          // 是否为分布式模式
 }
 
-// NewExecutor 创建执行器
+// NewExecutor 创建执行器（默认内存模式）
 func NewExecutor(cfg *config.Config) (*Executor, error) {
-	collector := statistics.NewCollector()
+	return NewExecutorWithMemoryStorage(cfg)
+}
+
+// NewExecutorWithMemoryStorage 创建内存存储模式的执行器
+func NewExecutorWithMemoryStorage(cfg *config.Config) (*Executor, error) {
+	collector := statistics.NewCollectorWithMemoryStorage("local")
+	return newExecutor(cfg, collector)
+}
+
+// NewExecutorWithSQLiteStorage 创建 SQLite 存储模式的执行器
+func NewExecutorWithSQLiteStorage(cfg *config.Config, dbPath string) (*Executor, error) {
+	collector := statistics.NewCollectorWithStorage(dbPath, "local")
+	return newExecutor(cfg, collector)
+}
+
+// newExecutor 内部构造函数（通用逻辑）
+func newExecutor(cfg *config.Config, collector *statistics.Collector) (*Executor, error) {
 
 	// 1. 创建客户端工厂
 	clientFactory := createClientFactory(cfg)
@@ -91,10 +117,11 @@ func NewExecutor(cfg *config.Config) (*Executor, error) {
 	})
 
 	exec := &Executor{
-		config:    cfg,
-		collector: collector,
-		scheduler: scheduler,
-		pool:      pool,
+		config:        cfg,
+		collector:     collector,
+		scheduler:     scheduler,
+		pool:          pool,
+		isDistributed: false, // 默认非分布式模式
 	}
 	return exec, nil
 }
@@ -180,11 +207,7 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 	startTime := time.Now()
 
 	// 运行调度器
-	if err := e.scheduler.Run(ctx); err != nil {
-		// 测试失败时关闭服务器
-		e.realtimeServer.Stop()
-		return nil, fmt.Errorf("执行压测失败: %w", err)
-	}
+	err := e.scheduler.Run(ctx)
 
 	totalDuration := time.Since(startTime)
 
@@ -196,8 +219,21 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 	// 清理资源
 	e.pool.Close()
 
-	// 生成报告
+	// 生成报告（即使出错也要生成）
 	report := e.collector.GenerateReport(totalDuration)
+
+	// 检查是否因为context取消而中断
+	if err != nil {
+		// 如果是用户主动取消，不关闭实时服务器，返回当前报告
+		if strings.Contains(err.Error(), "context canceled") {
+			logger.Default.Warn("\n⚠️  压测已被用户中断")
+			logger.Default.Info("📊 正在保存当前统计数据...")
+			return report, fmt.Errorf("执行压测失败: %w", err)
+		}
+		// 其他错误，关闭服务器
+		e.realtimeServer.Stop()
+		return nil, fmt.Errorf("执行压测失败: %w", err)
+	}
 
 	logger.Default.Info("\n✅ 压测完成!")
 	logger.Default.Info("📊 实时报告服务器继续运行，按 Ctrl+C 可停止并退出")
@@ -220,6 +256,23 @@ func (e *Executor) printStartInfo() {
 // GetCollector 获取统计收集器
 func (e *Executor) GetCollector() *statistics.Collector {
 	return e.collector
+}
+
+// SetStatsReporter 设置统计上报器（用于分布式模式）
+func (e *Executor) SetStatsReporter(reporter StatsReporter) {
+	e.statsReporter = reporter
+	e.isDistributed = true
+	// 在分布式模式下，同时将结果发送到本地收集器和远程上报器
+	if reporter != nil {
+		e.collector.SetExternalReporter(func(result *types.RequestResult) {
+			reporter.Add(result)
+		})
+	}
+}
+
+// IsDistributed 是否为分布式模式
+func (e *Executor) IsDistributed() bool {
+	return e.isDistributed
 }
 
 // openBrowser 在默认浏览器中打开URL

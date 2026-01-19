@@ -13,7 +13,6 @@ package protocol
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/url"
 	"time"
 
@@ -103,10 +102,9 @@ func (h *HTTPClient) Send(ctx context.Context, req *types.Request) (*types.Respo
 			RequestQuery:   queryString,
 		}, err
 	}
-	defer httpResp.Body.Close()
 
-	// 读取响应体
-	body, err := io.ReadAll(httpResp.Body)
+	// 读取响应体 - httpx.Response.Body() 返回 ([]byte, error)
+	body, err := httpResp.Body()
 	if err != nil {
 		return &types.Response{
 			StatusCode:     httpResp.StatusCode,

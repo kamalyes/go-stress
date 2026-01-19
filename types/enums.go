@@ -111,3 +111,27 @@ const (
 	ContentTypeProtobuf      ContentType = "application/protobuf"
 	ContentTypeMsgpack       ContentType = "application/msgpack"
 )
+
+// StorageMode 存储模式
+type StorageMode string
+
+const (
+	// StorageModeMemory 内存模式 - 数据存储在内存中，速度快但程序退出后丢失
+	StorageModeMemory StorageMode = "memory"
+
+	// StorageModeSQLite 文件模式 - 数据持久化到SQLite，支持海量数据
+	StorageModeSQLite StorageMode = "sqlite"
+)
+
+// StorageMode 实现 flag.Value 接口
+func (s *StorageMode) String() string {
+	if s == nil {
+		return string(StorageModeMemory)
+	}
+	return string(*s)
+}
+
+func (s *StorageMode) Set(value string) error {
+	*s = StorageMode(value)
+	return nil
+}

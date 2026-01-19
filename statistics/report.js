@@ -2,15 +2,81 @@
 console.log('========== 报告脚本已加载 ==========');
 console.log('当前时间:', new Date().toLocaleString());
 
+// ============ 元素ID常量 ============
+const ELEMENT_IDS = {
+  // 指标卡片
+  TOTAL_REQUESTS: 'total-requests',
+  SUCCESS_REQUESTS: 'success-requests',
+  FAILED_REQUESTS: 'failed-requests',
+  SUCCESS_RATE: 'success-rate',
+  QPS: 'qps',
+  AVG_DURATION: 'avg-duration',
+  ELAPSED: 'elapsed',
+  TEST_DURATION: 'test-duration',
+  
+  // 容器元素
+  FILE_LOADER: 'fileLoader',
+  METRICS_GRID: 'metricsGrid',
+  FILE_NAME: 'fileName',
+  DETAILS_TBODY: 'details-tbody',
+  
+  // Tab标签
+  TAB_ALL: 'tab-all',
+  TAB_SUCCESS: 'tab-success',
+  TAB_FAILED: 'tab-failed',
+  TAB_SKIPPED: 'tab-skipped',
+  COUNT_ALL: 'count-all',
+  COUNT_SUCCESS: 'count-success',
+  COUNT_FAILED: 'count-failed',
+  COUNT_SKIPPED: 'count-skipped',
+  
+  // 筛选器
+  SEARCH_PATH: 'searchPath',
+  METHOD_FILTER: 'methodFilter',
+  STATUS_FILTER: 'statusFilter',
+  DURATION_FILTER: 'durationFilter',
+  
+  // 分页
+  PAGINATION: 'pagination',
+  CURRENT_PAGE: 'currentPage',
+  TOTAL_PAGES: 'totalPages',
+  TOTAL_RECORDS: 'totalRecords',
+  PAGE_SIZE_SELECT: 'pageSizeSelect',
+  FIRST_BTN: 'firstBtn',
+  PREV_BTN: 'prevBtn',
+  NEXT_BTN: 'nextBtn',
+  LAST_BTN: 'lastBtn',
+  
+  // 控制按钮（实时模式）
+  PAUSE_BTN: 'pauseBtn',
+  STOP_BTN: 'stopBtn',
+  STATUS_TEXT: 'statusText',
+  STATUS_DOT: 'statusDot',
+  
+  // 图表
+  DURATION_CHART: 'durationChart',
+  STATUS_CHART: 'statusChart',
+  ERROR_CHART: 'errorChart'
+};
+
+// ============ Tab名称常量 ============
+const TAB_NAMES = {
+  ALL: 'all',
+  SUCCESS: 'success',
+  FAILED: 'failed',
+  SKIPPED: 'skipped'
+};
+
 let durationChart, statusChart, errorChart;
 const isRealtime = (typeof IS_REALTIME_PLACEHOLDER !== 'undefined' && IS_REALTIME_PLACEHOLDER) || false;
 const jsonFilename = "JSON_FILENAME_PLACEHOLDER" || "index.json";
+let serverTotal = 0; // 服务器返回的真实总数（用于实时模式分页显示）
 
 console.log('运行模式:', isRealtime ? '实时模式' : '静态模式');
 
 // 全局变量存储所有数据
 let allDetailsData = [];
-let currentTab = "all";
+let currentTab = TAB_NAMES.ALL;
 let currentPage = 1;
 let pageSize = 20;
 let filteredData = [];
@@ -20,9 +86,9 @@ let isPaused = false;
 // 控制函数（暂停/恢复/停止）
 window.togglePause = function() {
   const endpoint = isPaused ? '/api/resume' : '/api/pause';
-  const pauseBtn = document.getElementById('pauseBtn');
-  const statusText = document.getElementById('statusText');
-  const statusDot = document.getElementById('statusDot');
+  const pauseBtn = document.getElementById(ELEMENT_IDS.PAUSE_BTN);
+  const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
+  const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
   
   fetch(endpoint, { method: 'POST' })
     .then(response => response.json())
@@ -54,10 +120,10 @@ window.stopMonitoring = function() {
     return;
   }
   
-  const stopBtn = document.getElementById('stopBtn');
-  const pauseBtn = document.getElementById('pauseBtn');
-  const statusText = document.getElementById('statusText');
-  const statusDot = document.getElementById('statusDot');
+  const stopBtn = document.getElementById(ELEMENT_IDS.STOP_BTN);
+  const pauseBtn = document.getElementById(ELEMENT_IDS.PAUSE_BTN);
+  const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
+  const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
   
   fetch('/api/stop', { method: 'POST' })
     .then(response => response.json())
@@ -81,7 +147,7 @@ window.handleFileSelect = function (event) {
   const file = event.target.files[0];
   if (!file) return;
 
-  const fileNameElem = document.getElementById("fileName");
+  const fileNameElem = document.getElementById(ELEMENT_IDS.FILE_NAME);
   if (fileNameElem) {
     fileNameElem.textContent = "正在加载: " + file.name;
   }
@@ -118,8 +184,11 @@ if (!isRealtime) {
   // 加载数据的统一处理函数
   window.loadReportData = function (data) {
     try {
-      document.getElementById("fileLoader").style.display = "none";
-      document.getElementById("infoBar").style.display = "flex";
+      document.getElementById(ELEMENT_IDS.FILE_LOADER).style.display = "none";
+      const metricsGrid = document.getElementById(ELEMENT_IDS.METRICS_GRID);
+      if (metricsGrid) {
+        metricsGrid.style.display = "grid";
+      }
 
       updateStaticMetrics(data);
       updateChartsFromData(data);
@@ -132,7 +201,7 @@ if (!isRealtime) {
     } catch (error) {
       console.error("数据处理错误:", error);
       alert("数据处理失败: " + error.message);
-      document.getElementById("fileName").textContent =
+      document.getElementById(ELEMENT_IDS.FILE_NAME).textContent =
         "加载失败: " + error.message;
     }
   };
@@ -140,7 +209,7 @@ if (!isRealtime) {
   // 自动加载JSON文件
   window.autoLoadJSON = function () {
     const jsonUrl = jsonFilename;
-    document.getElementById("fileName").textContent =
+    document.getElementById(ELEMENT_IDS.FILE_NAME).textContent =
       "正在自动加载: " + jsonUrl;
 
     fetch(jsonUrl)
@@ -155,7 +224,7 @@ if (!isRealtime) {
       })
       .catch((error) => {
         console.warn("自动加载失败:", error);
-        document.getElementById("fileName").textContent =
+        document.getElementById(ELEMENT_IDS.FILE_NAME).textContent =
           "⚠️ 自动加载失败,请手动选择JSON文件";
       });
   };
@@ -163,9 +232,9 @@ if (!isRealtime) {
 
 // ============ 图表初始化 ============
 function initCharts() {
-  const durationChartDom = document.getElementById("durationChart");
-  const statusChartDom = document.getElementById("statusChart");
-  const errorChartDom = document.getElementById("errorChart");
+  const durationChartDom = document.getElementById(ELEMENT_IDS.DURATION_CHART);
+  const statusChartDom = document.getElementById(ELEMENT_IDS.STATUS_CHART);
+  const errorChartDom = document.getElementById(ELEMENT_IDS.ERROR_CHART);
 
   if (durationChartDom) {
     durationChart = echarts.init(durationChartDom);
@@ -226,14 +295,17 @@ function updateStaticMetrics(data) {
     if (elem) elem.textContent = value;
   };
 
-  setTextContent("generate-time", data.generate_time || new Date().toLocaleString('zh-CN'));
-  setTextContent("test-duration", data.test_duration || (data.total_time_ms ? data.total_time_ms + 'ms' : '-'));
-  setTextContent("static-total-requests", data.total_requests || 0);
-  setTextContent(
-    "static-success-rate",
-    (data.success_rate || 0).toFixed(2) + "%"
-  );
-  setTextContent("static-qps", (data.qps || 0).toFixed(2));
+  // 使用与实时报告相同的元素ID
+  setTextContent(ELEMENT_IDS.TOTAL_REQUESTS, data.total_requests || 0);
+  setTextContent(ELEMENT_IDS.SUCCESS_REQUESTS, data.success_requests || 0);
+  setTextContent(ELEMENT_IDS.FAILED_REQUESTS, data.failed_requests || 0);
+  setTextContent(ELEMENT_IDS.SUCCESS_RATE, (data.success_rate || 0).toFixed(2) + "%");
+  setTextContent(ELEMENT_IDS.QPS, (data.qps || 0).toFixed(2));
+  setTextContent(ELEMENT_IDS.AVG_DURATION, (data.avg_duration_ms || 0).toFixed(2) + "ms");
+  
+  // 静态报告特有的：测试时长（使用total_time）
+  const totalTimeSec = data.total_time_ms ? (data.total_time_ms / 1000).toFixed(2) : 0;
+  setTextContent(ELEMENT_IDS.TEST_DURATION, totalTimeSec + "s");
 }
 
 function updateChartsFromData(data) {
@@ -272,7 +344,7 @@ function updateChartsFromData(data) {
 
 // ============ 明细渲染 ============
 function renderStaticDetails(details) {
-  const tbody = document.getElementById("details-tbody");
+  const tbody = document.getElementById(ELEMENT_IDS.DETAILS_TBODY);
   if (!details || details.length === 0) {
     tbody.innerHTML =
       '<tr><td colspan="12" style="text-align:center;">无请求数据</td></tr>';
@@ -340,7 +412,7 @@ function switchTab(tab) {
   document
     .querySelectorAll(".tab-btn")
     .forEach((btn) => btn.classList.remove("active"));
-  document.getElementById("tab-" + tab).classList.add("active");
+  document.getElementById('tab-' + tab).classList.add("active");
   
   // 收起所有展开的详情行
   const detailRows = document.querySelectorAll('.detail-row');
@@ -354,22 +426,31 @@ function switchTab(tab) {
     openDetails.clear();
   }
   
-  filterDetails();
+  // 重置到第一页
+  currentPage = 1;
+  
+  // 实时模式：直接从服务器加载新Tab的数据
+  if (isRealtime) {
+    loadRealtimePageData();
+  } else {
+    // 静态模式：客户端筛选
+    filterDetails();
+  }
 }
 
 function filterDetails() {
-  const searchValue = document.getElementById("searchPath").value.toLowerCase();
-  const methodFilter = document.getElementById("methodFilter").value;
-  const statusFilter = document.getElementById("statusFilter").value;
-  const durationFilter = document.getElementById("durationFilter").value;
+  const searchValue = document.getElementById(ELEMENT_IDS.SEARCH_PATH).value.toLowerCase();
+  const methodFilter = document.getElementById(ELEMENT_IDS.METHOD_FILTER).value;
+  const statusFilter = document.getElementById(ELEMENT_IDS.STATUS_FILTER).value;
+  const durationFilter = document.getElementById(ELEMENT_IDS.DURATION_FILTER).value;
 
   filteredData = allDetailsData;
 
-  if (currentTab === "success") {
+  if (currentTab === TAB_NAMES.SUCCESS) {
     filteredData = filteredData.filter((d) => d.success && !d.skipped);
-  } else if (currentTab === "failed") {
+  } else if (currentTab === TAB_NAMES.FAILED) {
     filteredData = filteredData.filter((d) => !d.success && !d.skipped);
-  } else if (currentTab === "skipped") {
+  } else if (currentTab === TAB_NAMES.SKIPPED) {
     filteredData = filteredData.filter((d) => d.skipped);
   }
 
@@ -418,58 +499,98 @@ function filterDetails() {
 }
 
 function clearFilters() {
-  document.getElementById("searchPath").value = "";
-  document.getElementById("methodFilter").value = "";
-  document.getElementById("statusFilter").value = "";
-  document.getElementById("durationFilter").value = "";
+  document.getElementById(ELEMENT_IDS.SEARCH_PATH).value = "";
+  document.getElementById(ELEMENT_IDS.METHOD_FILTER).value = "";
+  document.getElementById(ELEMENT_IDS.STATUS_FILTER).value = "";
+  document.getElementById(ELEMENT_IDS.DURATION_FILTER).value = "";
   filterDetails();
 }
 
 function updateTabCounts() {
-  const total = allDetailsData.length;
-  const skipped = allDetailsData.filter((d) => d.skipped).length;
-  const success = allDetailsData.filter((d) => d.success && !d.skipped).length;
-  const failed = allDetailsData.filter((d) => !d.success && !d.skipped).length;
+  // 实时模式使用服务器返回的真实统计数据，静态模式使用客户端数据
+  if (isRealtime && window.realtimeStats) {
+    // 使用从 /api/details 接口获取的真实统计数据
+    document.getElementById(ELEMENT_IDS.COUNT_ALL).textContent = window.realtimeStats.total_requests || 0;
+    document.getElementById(ELEMENT_IDS.COUNT_SUCCESS).textContent = window.realtimeStats.success_count || 0;
+    document.getElementById(ELEMENT_IDS.COUNT_FAILED).textContent = window.realtimeStats.failed_count || 0;
+    document.getElementById(ELEMENT_IDS.COUNT_SKIPPED).textContent = window.realtimeStats.skipped_count || 0;
+  } else {
+    // 静态模式使用客户端加载的详情数据计算
+    const total = allDetailsData.length;
+    const skipped = allDetailsData.filter((d) => d.skipped).length;
+    const success = allDetailsData.filter((d) => d.success && !d.skipped).length;
+    const failed = allDetailsData.filter((d) => !d.success && !d.skipped).length;
 
-  document.getElementById("count-all").textContent = total;
-  document.getElementById("count-success").textContent = success;
-  document.getElementById("count-failed").textContent = failed;
-  document.getElementById("count-skipped").textContent = skipped;
+    document.getElementById(ELEMENT_IDS.COUNT_ALL).textContent = total;
+    document.getElementById(ELEMENT_IDS.COUNT_SUCCESS).textContent = success;
+    document.getElementById(ELEMENT_IDS.COUNT_FAILED).textContent = failed;
+    document.getElementById(ELEMENT_IDS.COUNT_SKIPPED).textContent = skipped;
+  }
 }
 
 // ============ 分页 ============
 function renderPage() {
-  const start = (currentPage - 1) * pageSize;
-  const end = start + pageSize;
-  const pageData = filteredData.slice(start, end);
-
+  // 实时模式：从服务器加载数据（支持真正的分页）
   if (isRealtime) {
-    renderRealtimeDetails(pageData);
+    loadRealtimePageData();
   } else {
+    // 静态模式：使用客户端内存分页
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    const pageData = filteredData.slice(start, end);
     renderStaticDetails(pageData);
-  }
-
-  updatePaginationControls();
-
-  const paginationEl = document.getElementById("pagination");
-  if (paginationEl && filteredData.length > pageSize) {
-    paginationEl.style.display = "flex";
-  } else if (paginationEl) {
-    paginationEl.style.display = "none";
+    updatePaginationControls();
+    
+    const paginationEl = document.getElementById(ELEMENT_IDS.PAGINATION);
+    if (paginationEl && filteredData.length > pageSize) {
+      paginationEl.style.display = "flex";
+    } else if (paginationEl) {
+      paginationEl.style.display = "none";
+    }
   }
 }
 
 function updatePaginationControls() {
-  const totalPages = Math.ceil(filteredData.length / pageSize) || 1;
+  // 实时模式使用服务器返回的真实总数和计数器总数
+  let displayTotal;
+  if (isRealtime && window.realtimeStats) {
+    // 根据当前 tab 显示对应的总数
+    switch (currentTab) {
+      case TAB_NAMES.SUCCESS:
+        displayTotal = window.realtimeStats.success_count || 0;
+        break;
+      case TAB_NAMES.FAILED:
+        displayTotal = window.realtimeStats.failed_count || 0;
+        break;
+      case TAB_NAMES.SKIPPED:
+        displayTotal = window.realtimeStats.skipped_count || 0;
+        break;
+      default:
+        displayTotal = window.realtimeStats.total_requests || 0;
+    }
+  } else {
+    // 静态模式使用客户端筛选后的总数
+    displayTotal = filteredData.length;
+  }
+  
+  const totalPages = Math.ceil(displayTotal / pageSize) || 1;
 
-  document.getElementById("currentPage").textContent = currentPage;
-  document.getElementById("totalPages").textContent = totalPages;
-  document.getElementById("totalRecords").textContent = filteredData.length;
+  document.getElementById(ELEMENT_IDS.CURRENT_PAGE).textContent = currentPage;
+  document.getElementById(ELEMENT_IDS.TOTAL_PAGES).textContent = totalPages;
+  document.getElementById(ELEMENT_IDS.TOTAL_RECORDS).textContent = displayTotal;
 
-  document.getElementById("firstBtn").disabled = currentPage === 1;
-  document.getElementById("prevBtn").disabled = currentPage === 1;
-  document.getElementById("nextBtn").disabled = currentPage >= totalPages;
-  document.getElementById("lastBtn").disabled = currentPage >= totalPages;
+  document.getElementById(ELEMENT_IDS.FIRST_BTN).disabled = currentPage === 1;
+  document.getElementById(ELEMENT_IDS.PREV_BTN).disabled = currentPage === 1;
+  document.getElementById(ELEMENT_IDS.NEXT_BTN).disabled = currentPage >= totalPages;
+  document.getElementById(ELEMENT_IDS.LAST_BTN).disabled = currentPage >= totalPages;
+  
+  // 显示分页控件
+  const paginationEl = document.getElementById(ELEMENT_IDS.PAGINATION);
+  if (paginationEl && displayTotal > pageSize) {
+    paginationEl.style.display = "flex";
+  } else if (paginationEl) {
+    paginationEl.style.display = "none";
+  }
 }
 
 function goToFirstPage() {
@@ -485,7 +606,27 @@ function previousPage() {
 }
 
 function nextPage() {
-  const totalPages = Math.ceil(filteredData.length / pageSize);
+  // 实时模式：使用服务器总数，静态模式：使用客户端筛选后的总数
+  let displayTotal;
+  if (isRealtime && window.realtimeStats) {
+    switch (currentTab) {
+      case TAB_NAMES.SUCCESS:
+        displayTotal = window.realtimeStats.success_count || 0;
+        break;
+      case TAB_NAMES.FAILED:
+        displayTotal = window.realtimeStats.failed_count || 0;
+        break;
+      case TAB_NAMES.SKIPPED:
+        displayTotal = window.realtimeStats.skipped_count || 0;
+        break;
+      default:
+        displayTotal = window.realtimeStats.total_requests || 0;
+    }
+  } else {
+    displayTotal = filteredData.length;
+  }
+  
+  const totalPages = Math.ceil(displayTotal / pageSize);
   if (currentPage < totalPages) {
     currentPage++;
     renderPage();
@@ -493,12 +634,33 @@ function nextPage() {
 }
 
 function goToLastPage() {
-  currentPage = Math.ceil(filteredData.length / pageSize) || 1;
+  // 实时模式：使用服务器总数，静态模式：使用客户端筛选后的总数
+  let displayTotal;
+  if (isRealtime && window.realtimeStats) {
+    switch (currentTab) {
+      case TAB_NAMES.SUCCESS:
+        displayTotal = window.realtimeStats.success_count || 0;
+        break;
+      case TAB_NAMES.FAILED:
+        displayTotal = window.realtimeStats.failed_count || 0;
+        break;
+      case TAB_NAMES.SKIPPED:
+        displayTotal = window.realtimeStats.skipped_count || 0;
+        break;
+      default:
+        displayTotal = window.realtimeStats.total_requests || 0;
+    }
+  } else {
+    displayTotal = filteredData.length;
+  }
+  
+  const totalPages = Math.ceil(displayTotal / pageSize) || 1;
+  currentPage = totalPages;
   renderPage();
 }
 
 function changePageSize() {
-  pageSize = parseInt(document.getElementById("pageSizeSelect").value);
+  pageSize = parseInt(document.getElementById(ELEMENT_IDS.PAGE_SIZE_SELECT).value);
   currentPage = 1;
   renderPage();
 }
@@ -580,6 +742,14 @@ function generateDetailContent(req) {
   const tabId = 'tab-' + Math.random().toString(36).substr(2, 9);
   let html = '<div class="detail-tabs-container">';
   
+  // 跳过提示
+  if (req.skipped) {
+    html += '<div style="padding:12px;background:#fff3cd;border-left:4px solid #ffc107;color:#856404;margin-bottom:15px;border-radius:4px;">';
+    html += '<strong>⚠️ 此请求已跳过:</strong> ' + escapeHtml(req.skip_reason || '依赖的API失败');
+    html += '<div style="margin-top:5px;font-size:13px;">下方显示的是配置的请求信息和验证规则（未实际执行）</div>';
+    html += '</div>';
+  }
+  
   // Tab按钮
   html += '<div class="detail-tabs-header">';
   html += '<button class="detail-tab-btn active" onclick="switchDetailTab(event, \'' + tabId + '-url\')">请求信息</button>';
@@ -592,7 +762,8 @@ function generateDetailContent(req) {
     html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-reqbody\')">请求Body</button>';
   }
   
-  if (req.response_body) {
+  // 只有非跳过请求才显示响应Body
+  if (!req.skipped && req.response_body) {
     html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-respbody\')">响应Body</button>';
   }
   
@@ -601,9 +772,28 @@ function generateDetailContent(req) {
   }
   
   if (req.verifications && req.verifications.length > 0) {
-    const allPassed = req.verifications.every(v => v.success);
-    html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-verify\')" style="color:' + (allPassed ? '#38ef7d' : '#f45c43') + ';">' + 
-      (allPassed ? '✓ ' : '✗ ') + '验证结果</button>';
+    // 判断验证状态：跳过、全部通过、有失败
+    const allSkipped = req.verifications.every(v => v.skipped);
+    const allPassed = req.verifications.every(v => v.success || v.skipped);
+    const hasSkipped = req.verifications.some(v => v.skipped);
+    
+    let tabColor, tabLabel;
+    if (allSkipped) {
+      // 全部跳过（灰色）
+      tabColor = '#6c757d';
+      tabLabel = '⏭ 未执行';
+    } else if (allPassed) {
+      // 全部通过（绿色）
+      tabColor = '#38ef7d';
+      tabLabel = '✓ 验证通过';
+    } else {
+      // 有失败（红色）
+      tabColor = '#f45c43';
+      tabLabel = '✗ 验证失败';
+    }
+    
+    html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-verify\')" style="color:' + tabColor + ';">' + 
+      tabLabel + '</button>';
   }
   
   if (req.error) {
@@ -709,14 +899,35 @@ function generateDetailContent(req) {
     html += '<div style="background:#f8f9fa;padding:15px;border-radius:8px;">';
     
     req.verifications.forEach((verify, idx) => {
-      const statusColor = verify.success ? '#38ef7d' : '#f45c43';
-      const statusBg = verify.success ? '#f0fdf4' : '#fff5f5';
-      const statusBorder = verify.success ? '#86efac' : '#feb2b2';
+      // 判断验证状态：跳过、成功、失败
+      let statusColor, statusBg, statusBorder, statusText, statusIcon;
+      if (verify.skipped) {
+        // 跳过状态（灰色）
+        statusColor = '#6c757d';
+        statusBg = '#f8f9fa';
+        statusBorder = '#dee2e6';
+        statusText = '未执行';
+        statusIcon = '⏭';
+      } else if (verify.success) {
+        // 成功状态（绿色）
+        statusColor = '#38ef7d';
+        statusBg = '#f0fdf4';
+        statusBorder = '#86efac';
+        statusText = '验证通过';
+        statusIcon = '✓';
+      } else {
+        // 失败状态（红色）
+        statusColor = '#f45c43';
+        statusBg = '#fff5f5';
+        statusBorder = '#feb2b2';
+        statusText = '验证失败';
+        statusIcon = '✗';
+      }
       
       html += '<div style="background:white;padding:15px;border-radius:8px;margin-bottom:10px;border:2px solid ' + statusBorder + ';">';
       html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">';
-      html += '<span style="font-size:20px;">' + (verify.success ? '✓' : '✗') + '</span>';
-      html += '<strong style="color:' + statusColor + ';">' + (verify.success ? '验证通过' : '验证失败') + '</strong>';
+      html += '<span style="font-size:20px;">' + statusIcon + '</span>';
+      html += '<strong style="color:' + statusColor + ';">' + statusText + '</strong>';
       html += '</div>';
       
       if (verify.name) {
@@ -794,23 +1005,23 @@ window.switchDetailTab = function(event, tabId) {
 if (isRealtime) {
   // 实时模式 - 更新指标
   window.updateMetrics = function (data) {
-    document.getElementById("total-requests").textContent = data.total_requests;
-    document.getElementById("success-requests").textContent =
+    document.getElementById(ELEMENT_IDS.TOTAL_REQUESTS).textContent = data.total_requests;
+    document.getElementById(ELEMENT_IDS.SUCCESS_REQUESTS).textContent =
       data.success_requests;
-    document.getElementById("failed-requests").textContent =
+    document.getElementById(ELEMENT_IDS.FAILED_REQUESTS).textContent =
       data.failed_requests;
-    document.getElementById("success-rate").textContent =
+    document.getElementById(ELEMENT_IDS.SUCCESS_RATE).textContent =
       data.success_rate.toFixed(2) + "%";
-    document.getElementById("qps").textContent = data.qps.toFixed(2);
-    document.getElementById("avg-duration").textContent =
+    document.getElementById(ELEMENT_IDS.QPS).textContent = data.qps.toFixed(2);
+    document.getElementById(ELEMENT_IDS.AVG_DURATION).textContent =
       data.avg_duration_ms + "ms";
-    document.getElementById("elapsed").textContent = data.elapsed_seconds + "s";
+    document.getElementById(ELEMENT_IDS.ELAPSED).textContent = data.elapsed_seconds + "s";
     
     // 检查任务状态并更新按钮
-    const pauseBtn = document.getElementById('pauseBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const statusText = document.getElementById('statusText');
-    const statusDot = document.getElementById('statusDot');
+    const pauseBtn = document.getElementById(ELEMENT_IDS.PAUSE_BTN);
+    const stopBtn = document.getElementById(ELEMENT_IDS.STOP_BTN);
+    const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
+    const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
     
     if (data.is_completed) {
       // 任务已完成 - 隐藏控制按钮
@@ -909,18 +1120,41 @@ if (isRealtime) {
   let lastDetailsCount = 0;
   const openDetails = new Set();
 
-  // 加载详情数据
-  window.loadDetails = function () {
-    fetch("/api/details?offset=0&limit=100")
+  // 实时模式：从服务器加载分页数据
+  window.loadRealtimePageData = function() {
+    const offset = (currentPage - 1) * pageSize;
+    const status = currentTab === TAB_NAMES.ALL ? TAB_NAMES.ALL : currentTab; // all/success/failed/skipped
+    
+    fetch(`/api/details?status=${status}&offset=${offset}&limit=${pageSize}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.total === lastDetailsCount && lastDetailsCount > 0) {
-          return;
+        // 更新全局统计计数器（用于Tab标签显示和分页计算）
+        if (!window.realtimeStats) {
+          window.realtimeStats = {};
         }
-        lastDetailsCount = data.total;
-        allDetailsData = data.details || [];
-        filterDetails();
+        window.realtimeStats.total_requests = data.total_requests || 0;
+        window.realtimeStats.success_count = data.success_count || 0;
+        window.realtimeStats.failed_count = data.failed_count || 0;
+        window.realtimeStats.skipped_count = data.skipped_count || 0;
+        
+        // 渲染当前页数据
+        const details = data.details || [];
+        renderRealtimeDetails(details);
+        
+        // 更新分页控件
+        updatePaginationControls();
+        
+        // 更新Tab标签的计数显示
+        updateTabCounts();
+      })
+      .catch((err) => {
+        console.error('加载分页数据失败:', err);
       });
+  };
+
+  // 加载详情数据（初始加载时使用）
+  window.loadDetails = function () {
+    loadRealtimePageData();
   };
 
   // 渲染实时明细
