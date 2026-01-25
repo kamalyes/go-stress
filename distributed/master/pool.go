@@ -29,13 +29,14 @@ type SlavePool struct {
 }
 
 // NewSlavePool 创建 Slave 池
-func NewSlavePool(selector SlaveSelector, log logger.ILogger) *SlavePool {
+func NewSlavePool(selector SlaveSelector, interval, timeout time.Duration, maxFailures int, log logger.ILogger) *SlavePool {
 	pool := &SlavePool{
 		slaves:   syncx.NewMap[string, *common.SlaveInfo](),
 		selector: selector,
 		logger:   log,
 	}
-	pool.healthCheck = NewHealthChecker(pool, log)
+	// 使用传入的配置创建健康检查器
+	pool.healthCheck = NewHealthChecker(pool, interval, timeout, maxFailures, log)
 	return pool
 }
 
@@ -296,6 +297,22 @@ func (sp *SlavePool) MarkUnhealthy(slaveID string) error {
 // Count 获取 Slave 总数
 func (sp *SlavePool) Count() int {
 	return sp.slaves.Size()
+}
+
+// GetAllSlaves 获取所有 Slave 信息（供 HTTP API 使用）
+func (sp *SlavePool) GetAllSlaves() []*common.SlaveInfo {
+	slaves := make([]*common.SlaveInfo, 0)
+	sp.slaves.Range(func(_ string, slave *common.SlaveInfo) bool {
+		slaves = append(slaves, slave)
+		return true
+	})
+	return slaves
+}
+
+// GetSlave 获取单个 Slave 信息（供 HTTP API 使用）
+func (sp *SlavePool) GetSlave(slaveID string) *common.SlaveInfo {
+	slave, _ := sp.slaves.Load(slaveID)
+	return slave
 }
 
 // StartHealthCheck 启动健康检查

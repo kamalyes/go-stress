@@ -1,0 +1,25 @@
+# WebSocket 快速测试（小并发）
+protocol: websocket
+url: ws://localhost:3000/ws
+
+concurrency: 5
+requests: 20
+timeout: 5s
+
+body: |
+  {
+    "action": "ping",
+    "message_id": {{seq}},
+    "timestamp": {{unix}}
+  }
+
+advanced:
+  enable_breaker: false
+  enable_retry: false
+
+realtime:
+  enabled: true
+  port: 8088
+
+storage:
+  mode: memory

@@ -127,14 +127,14 @@ func (pt *ProgressTracker) printProgress(elapsed time.Duration) {
 	minDur := "-"
 	maxDur := "-"
 	avgDur := "-"
-	if stats.MinDuration < time.Hour {
-		minDur = fmt.Sprintf("%.2fms", float64(stats.MinDuration.Microseconds())/1000)
+	if stats.MinLatency < time.Hour {
+		minDur = fmt.Sprintf("%.2fms", float64(stats.MinLatency.Microseconds())/1000)
 	}
-	if stats.MaxDuration > 0 {
-		maxDur = fmt.Sprintf("%.2fms", float64(stats.MaxDuration.Microseconds())/1000)
+	if stats.MaxLatency > 0 {
+		maxDur = fmt.Sprintf("%.2fms", float64(stats.MaxLatency.Microseconds())/1000)
 	}
-	if stats.AvgDuration > 0 {
-		avgDur = fmt.Sprintf("%.2fms", float64(stats.AvgDuration.Microseconds())/1000)
+	if stats.AvgLatency > 0 {
+		avgDur = fmt.Sprintf("%.2fms", float64(stats.AvgLatency.Microseconds())/1000)
 	}
 
 	logger.Default.Infof("│ %4ds │ %6d │ %6d │ %6d │ %7.2f │ %8s │ %8s │ %8s │ %9s │ %9s │ %-11s │",

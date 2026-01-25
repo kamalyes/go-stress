@@ -16,7 +16,6 @@ const reportHTML = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Go-Stress {{if .IsRealtime}}实时{{end}}性能测试报告</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%23667eea;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%23764ba2;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='20' fill='url(%23grad)'/%3E%3Cpath d='M30 55 L45 70 L70 30' stroke='white' stroke-width='8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M25 30 L35 30 M65 70 L75 70 M30 25 L30 35 M70 65 L70 75' stroke='%2338ef7d' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="report.css">
 </head>
@@ -58,6 +57,25 @@ const reportHTML = `<!DOCTYPE html>
             <div class="file-name" id="fileName"></div>
         </div>
         {{end}}
+        
+        <!-- 配置信息区域 -->
+        <div class="config-info" id="configInfo" style="display: none;">
+            <h3>⚙️ 配置信息</h3>
+            <div class="config-grid">
+                <div class="config-item">
+                    <span class="config-label">协议:</span>
+                    <span class="config-value" id="config-protocol">-</span>
+                </div>
+                <div class="config-item">
+                    <span class="config-label">并发数:</span>
+                    <span class="config-value" id="config-concurrency">-</span>
+                </div>
+                <div class="config-item">
+                    <span class="config-label">计划请求数:</span>
+                    <span class="config-value" id="config-total-reqs">-</span>
+                </div>
+            </div>
+        </div>
         
         <!-- 统一的指标卡片（实时和静态都使用） -->
         <div class="metrics-grid" id="metricsGrid" {{if not .IsRealtime}}style="display: none;"{{end}}>

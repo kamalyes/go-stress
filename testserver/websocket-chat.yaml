@@ -1,0 +1,34 @@
+# WebSocket 聊天室压测
+protocol: websocket
+url: ws://localhost:3000/ws/chat
+method: POST
+
+concurrency: 50
+requests: 1000
+timeout: 10s
+
+# 模拟聊天消息
+body: |
+  {
+    "action": "chat",
+    "message_id": {{seq}},
+    "data": {
+      "content": "{{randomString 10}}: {{randomSentence}}",
+      "user_id": "user_{{randomInt 1 100}}",
+      "room_id": "room_{{randomInt 1 5}}",
+      "timestamp": {{unix}}
+    }
+  }
+
+advanced:
+  enable_breaker: false
+  enable_retry: true
+  max_retry: 3
+  ramp_up: 10s
+
+realtime:
+  enabled: true
+  port: 8088
+
+storage:
+  mode: memory

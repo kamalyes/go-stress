@@ -62,10 +62,10 @@ type HTMLFormatter struct {
 type TemplateData struct {
 	IsRealtime   bool
 	GenerateTime string
-	JSONFilename string  // JSON数据文件名（用于实时报告加载数据）
-	Report       *Report // 直接传递 Report，在模板中格式化
+	JSONFilename string  // JSON数据文件名(用于实时报告加载数据)
+	Report       *Report // 直接传递 Report,在模板中格式化
 
-	// 格式化的辅助方法（在模板中调用）
+	// 格式化的辅助方法(在模板中调用)
 	FormatDuration  func(time.Duration) string
 	FormatPercent   func(float64) string
 	FormatSize      func(float64) string
@@ -174,13 +174,13 @@ func (f *TextFormatter) Format(report *Report) ([]byte, error) {
 	buf.WriteString(fmt.Sprintf("成功率: %.2f%%\n", report.SuccessRate))
 	buf.WriteString(fmt.Sprintf("QPS: %.2f\n", report.QPS))
 	buf.WriteString(fmt.Sprintf("总耗时: %s\n", report.TotalTime))
-	buf.WriteString(fmt.Sprintf("最小耗时: %s\n", report.MinDuration))
-	buf.WriteString(fmt.Sprintf("最大耗时: %s\n", report.MaxDuration))
-	buf.WriteString(fmt.Sprintf("平均耗时: %s\n", report.AvgDuration))
-	buf.WriteString(fmt.Sprintf("P50: %s\n", report.P50))
-	buf.WriteString(fmt.Sprintf("P90: %s\n", report.P90))
-	buf.WriteString(fmt.Sprintf("P95: %s\n", report.P95))
-	buf.WriteString(fmt.Sprintf("P99: %s\n", report.P99))
+	buf.WriteString(fmt.Sprintf("最小耗时: %s\n", report.MinLatency))
+	buf.WriteString(fmt.Sprintf("最大耗时: %s\n", report.MaxLatency))
+	buf.WriteString(fmt.Sprintf("平均耗时: %s\n", report.AvgLatency))
+	buf.WriteString(fmt.Sprintf("P50: %s\n", report.P50Latency))
+	buf.WriteString(fmt.Sprintf("P90: %s\n", report.P90Latency))
+	buf.WriteString(fmt.Sprintf("P95: %s\n", report.P95Latency))
+	buf.WriteString(fmt.Sprintf("P99: %s\n", report.P99Latency))
 	buf.WriteString(fmt.Sprintf("总数据量: %s\n", units.BytesSize(report.TotalSize)))
 
 	// 错误统计

@@ -31,23 +31,24 @@ type ResourceUsage struct {
 
 // AggregatedStats 聚合统计数据
 type AggregatedStats struct {
-	TaskID        string                 `json:"task_id"`
-	TimeRange     TimeRange              `json:"time_range"`
-	TotalAgents   int                    `json:"total_agents"`
-	TotalRequests int64                  `json:"total_requests"`
-	TotalSuccess  int64                  `json:"total_success"`
-	TotalFailed   int64                  `json:"total_failed"`
-	SuccessRate   float64                `json:"success_rate"`
-	AvgLatency    float64                `json:"avg_latency"`
-	MinLatency    float64                `json:"min_latency"`
-	MaxLatency    float64                `json:"max_latency"`
-	P50Latency    float64                `json:"p50_latency"`
-	P95Latency    float64                `json:"p95_latency"`
-	P99Latency    float64                `json:"p99_latency"`
-	TotalQPS      float64                `json:"total_qps"`
-	BySlave       map[string]*SlaveStats `json:"by_slave"`
-	StatusCodes   map[int]int64          `json:"status_codes"`
-	ErrorTypes    map[string]int64       `json:"error_types"`
+	TaskID          string                 `json:"task_id"`
+	TimeRange       TimeRange              `json:"time_range"`
+	TotalAgents     int                    `json:"total_agents"`
+	TotalRequests   int64                  `json:"total_requests"`
+	SuccessRequests int64                  `json:"success_requests"`
+	FailedRequests  int64                  `json:"failed_requests"`
+	SuccessRate     float64                `json:"success_rate"`
+	AvgLatency      float64                `json:"avg_latency"`
+	MinLatency      float64                `json:"min_latency"`
+	MaxLatency      float64                `json:"max_latency"`
+	P50Latency      float64                `json:"p50_latency"`
+	P90Latency      float64                `json:"p90_latency"`
+	P95Latency      float64                `json:"p95_latency"`
+	P99Latency      float64                `json:"p99_latency"`
+	TotalQPS        float64                `json:"total_qps"`
+	BySlave         map[string]*SlaveStats `json:"by_slave"`
+	StatusCodes     map[int]int64          `json:"status_codes"`
+	ErrorTypes      map[string]int64       `json:"error_types"`
 }
 
 // TimeRange 时间范围
@@ -58,14 +59,21 @@ type TimeRange struct {
 
 // SlaveStats Slave 统计数据
 type SlaveStats struct {
-	TaskID        string        `json:"task_id"`        // 任务ID
-	SlaveID       string        `json:"slave_id"`
-	TotalRequests int64         `json:"total_requests"`
-	SuccessCount  int64         `json:"success_count"`
-	FailedCount   int64         `json:"failed_count"`
-	AvgLatency    float64       `json:"avg_latency"`
-	P95Latency    float64       `json:"p95_latency"`
-	P99Latency    float64       `json:"p99_latency"`
-	QPS           float64       `json:"qps"`
-	StatusCodes   map[int]int64 `json:"status_codes"`
+	TaskID          string           `json:"task_id"` // 任务ID
+	SlaveID         string           `json:"slave_id"`
+	TotalRequests   int64            `json:"total_requests"`
+	SuccessRequests int64            `json:"success_requests"`
+	FailedRequests  int64            `json:"failed_requests"`
+	SuccessRate     float64          `json:"success_rate"`
+	AvgLatency      float64          `json:"avg_latency"`
+	MinLatency      float64          `json:"min_latency"`
+	MaxLatency      float64          `json:"max_latency"`
+	P50Latency      float64          `json:"p50_latency"`
+	P95Latency      float64          `json:"p95_latency"`
+	P90Latency      float64          `json:"p90_latency"`
+	P99Latency      float64          `json:"p99_latency"`
+	QPS             float64          `json:"qps"`
+	TotalQPS        float64          `json:"total_qps"`
+	StatusCodes     map[int]int64    `json:"status_codes"`
+	ErrorTypes      map[string]int64 `json:"error_types"`
 }

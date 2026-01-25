@@ -37,9 +37,9 @@ const (
 type TaskState string
 
 const (
-	TaskStatePending  TaskState = "pending"  // 待执行 | EN Pending
-	TaskStateRunning  TaskState = "running"  // 运行中 | EN Running
-	TaskStateComplete TaskState = "complete" // 已完成 | EN Completed
-	TaskStateFailed   TaskState = "failed"   // 执行失败 | EN Failed
-	TaskStateStopped  TaskState = "stopped"  // 已停止 | EN Stopped
+	TaskStatePending   TaskState = "pending"   // 待执行 | EN Pending
+	TaskStateRunning   TaskState = "running"   // 运行中 | EN Running
+	TaskStateCompleted TaskState = "completed" // 已完成 | EN Completed
+	TaskStateFailed    TaskState = "failed"    // 执行失败 | EN Failed
+	TaskStateStopped   TaskState = "stopped"   // 已停止 | EN Stopped
 )

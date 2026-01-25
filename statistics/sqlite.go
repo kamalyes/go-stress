@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2026-01-24 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-24 16:00:00
+ * @LastEditTime: 2026-01-25 22:12:09
  * @FilePath: \go-stress\statistics\sqlite.go
  * @Description: SQLite存储层 - 持久化请求详情（支持无限存储）
  *
@@ -16,11 +16,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/kamalyes/go-logger"
 	_ "github.com/mattn/go-sqlite3"
+)
+
+const (
+	// 表名常量
+	tableRequestDetails = "request_details"
 )
 
 // StatusFilter 状态过滤器枚举
@@ -64,13 +70,13 @@ func ParseStatusFilter(s string) StatusFilter {
 // DetailStorageInterface 存储接口（统一 SQLite 和 Memory 实现）
 type DetailStorageInterface interface {
 	// Write 写入请求详情
-	Write(detail *RequestDetail)
+	Write(detail *RequestResult)
 
-	// Query 分页查询请求详情
-	Query(offset, limit int, statusFilter StatusFilter) ([]*RequestDetail, error)
+	// Query 分页查询请求详情（支持 nodeID 和 taskID 过滤）
+	Query(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) ([]*RequestResult, error)
 
-	// Count 统计总数
-	Count(statusFilter StatusFilter) (int, error)
+	// Count 统计总数（支持 nodeID 和 taskID 过滤）
+	Count(statusFilter StatusFilter, nodeID, taskID string) (int, error)
 
 	// Close 关闭存储并释放资源
 	Close() error
@@ -82,7 +88,7 @@ type DetailStorageInterface interface {
 // DetailStorage SQLite持久化存储（实现 DetailStorageInterface）
 type DetailStorage struct {
 	db          *sql.DB
-	writeChan   chan *RequestDetail
+	writeChan   chan *RequestResult
 	batchSize   int
 	flushTicker *time.Ticker
 	wg          sync.WaitGroup
@@ -134,10 +140,11 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 	}
 
 	// 创建表结构
-	schema := `
-	CREATE TABLE IF NOT EXISTS request_details (
+	schema := fmt.Sprintf(`
+	CREATE TABLE IF NOT EXISTS %s (
 		id TEXT PRIMARY KEY,
 		node_id TEXT NOT NULL,
+		task_id TEXT NOT NULL,
 		group_id TEXT,
 		api_name TEXT,
 		timestamp INTEGER NOT NULL,
@@ -157,12 +164,13 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 		verifications TEXT,
 		extracted_vars TEXT
 	);
-	CREATE INDEX IF NOT EXISTS idx_node_id ON request_details(node_id);
-	CREATE INDEX IF NOT EXISTS idx_timestamp ON request_details(timestamp);
-	CREATE INDEX IF NOT EXISTS idx_success ON request_details(success);
-	CREATE INDEX IF NOT EXISTS idx_skipped ON request_details(skipped);
-	CREATE INDEX IF NOT EXISTS idx_api_name ON request_details(api_name);
-	`
+	CREATE INDEX IF NOT EXISTS idx_node_id ON %s(node_id);
+	CREATE INDEX IF NOT EXISTS idx_task_id ON %s(task_id);
+	CREATE INDEX IF NOT EXISTS idx_timestamp ON %s(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_success ON %s(success);
+	CREATE INDEX IF NOT EXISTS idx_skipped ON %s(skipped);
+	CREATE INDEX IF NOT EXISTS idx_api_name ON %s(api_name);
+	`, tableRequestDetails, tableRequestDetails, tableRequestDetails, tableRequestDetails, tableRequestDetails, tableRequestDetails, tableRequestDetails)
 
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -177,7 +185,7 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 
 	storage := &DetailStorage{
 		db:            db,
-		writeChan:     make(chan *RequestDetail, 10000), // 1万缓冲
+		writeChan:     make(chan *RequestResult, 10000), // 1万缓冲
 		batchSize:     100,                              // 每100条批量写入
 		flushTicker:   time.NewTicker(1 * time.Second),  // 每秒强制刷新
 		nodeID:        nodeID,
@@ -196,7 +204,7 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 }
 
 // Write 异步写入请求详情（实现 DetailStorageInterface）
-func (s *DetailStorage) Write(detail *RequestDetail) {
+func (s *DetailStorage) Write(detail *RequestResult) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -220,7 +228,7 @@ func (s *DetailStorage) Write(detail *RequestDetail) {
 func (s *DetailStorage) batchWriter() {
 	defer s.wg.Done()
 
-	batch := make([]*RequestDetail, 0, s.batchSize)
+	batch := make([]*RequestResult, 0, s.batchSize)
 
 	flush := func() {
 		if len(batch) == 0 {
@@ -269,20 +277,20 @@ func (s *DetailStorage) batchWriter() {
 }
 
 // insertBatch 批量插入
-func (s *DetailStorage) insertBatch(batch []*RequestDetail) error {
+func (s *DetailStorage) insertBatch(batch []*RequestResult) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO request_details (
-			id, node_id, group_id, api_name, timestamp, url, method, query, headers, body,
+	stmt, err := tx.Prepare(fmt.Sprintf(`
+		INSERT INTO %s (
+			id, node_id, task_id, group_id, api_name, timestamp, url, method, query, headers, body,
 			duration, status_code, success, skipped, size, error,
 			response_body, response_headers, verifications, extracted_vars
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, tableRequestDetails))
 	if err != nil {
 		return err
 	}
@@ -297,7 +305,8 @@ func (s *DetailStorage) insertBatch(batch []*RequestDetail) error {
 
 		_, err := stmt.Exec(
 			detail.ID,
-			s.nodeID, // 记录节点ID
+			detail.NodeID,
+			detail.TaskID,
 			detail.GroupID,
 			detail.APIName,
 			detail.Timestamp.Unix(),
@@ -311,7 +320,7 @@ func (s *DetailStorage) insertBatch(batch []*RequestDetail) error {
 			boolToInt(detail.Success),
 			boolToInt(detail.Skipped),
 			detail.Size,
-			detail.Error,
+			detail.ErrorMsg,
 			detail.ResponseBody,
 			string(respHeadersJSON),
 			string(verificationsJSON),
@@ -326,20 +335,33 @@ func (s *DetailStorage) insertBatch(batch []*RequestDetail) error {
 }
 
 // Query 分页查询请求详情
-func (s *DetailStorage) Query(offset, limit int, statusFilter StatusFilter) ([]*RequestDetail, error) {
-	query := "SELECT * FROM request_details"
+func (s *DetailStorage) Query(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) ([]*RequestResult, error) {
+	query := fmt.Sprintf("SELECT * FROM %s", tableRequestDetails)
+	where := []string{}
 
 	// 根据状态过滤
 	switch statusFilter {
 	case StatusFilterSuccess:
-		query += " WHERE success = 1 AND skipped = 0"
+		where = append(where, "success = 1 AND skipped = 0")
 	case StatusFilterFailed:
-		query += " WHERE success = 0 AND skipped = 0"
+		where = append(where, "success = 0 AND skipped = 0")
 	case StatusFilterSkipped:
-		query += " WHERE skipped = 1"
-	case StatusFilterAll:
-	default:
-		// 默认查询全部
+		where = append(where, "skipped = 1")
+	}
+
+	// 根据节点ID过滤
+	if nodeID != "" {
+		where = append(where, fmt.Sprintf("node_id = '%s'", nodeID))
+	}
+
+	// 根据任务ID过滤
+	if taskID != "" {
+		where = append(where, fmt.Sprintf("task_id = '%s'", taskID))
+	}
+
+	// 组装 WHERE 子句
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
 	}
 
 	query += " ORDER BY id DESC LIMIT ? OFFSET ?"
@@ -350,7 +372,7 @@ func (s *DetailStorage) Query(offset, limit int, statusFilter StatusFilter) ([]*
 	}
 	defer rows.Close()
 
-	var results []*RequestDetail
+	var results []*RequestResult
 	for rows.Next() {
 		detail, err := s.scanDetail(rows)
 		if err != nil {
@@ -363,21 +385,33 @@ func (s *DetailStorage) Query(offset, limit int, statusFilter StatusFilter) ([]*
 }
 
 // Count 统计总数
-func (s *DetailStorage) Count(statusFilter StatusFilter) (int, error) {
-	query := "SELECT COUNT(*) FROM request_details"
+func (s *DetailStorage) Count(statusFilter StatusFilter, nodeID, taskID string) (int, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableRequestDetails)
+	where := []string{}
 
 	// 根据状态过滤
 	switch statusFilter {
 	case StatusFilterSuccess:
-		query += " WHERE success = 1 AND skipped = 0"
+		where = append(where, "success = 1 AND skipped = 0")
 	case StatusFilterFailed:
-		query += " WHERE success = 0 AND skipped = 0"
+		where = append(where, "success = 0 AND skipped = 0")
 	case StatusFilterSkipped:
-		query += " WHERE skipped = 1"
-	case StatusFilterAll:
-		// 不添加过滤条件
-	default:
-		// 默认查询全部
+		where = append(where, "skipped = 1")
+	}
+
+	// 根据节点ID过滤
+	if nodeID != "" {
+		where = append(where, fmt.Sprintf("node_id = '%s'", nodeID))
+	}
+
+	// 根据任务ID过滤
+	if taskID != "" {
+		where = append(where, fmt.Sprintf("task_id = '%s'", taskID))
+	}
+
+	// 组装 WHERE 子句
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
 	}
 
 	var count int
@@ -386,10 +420,9 @@ func (s *DetailStorage) Count(statusFilter StatusFilter) (int, error) {
 }
 
 // scanDetail 扫描行数据
-func (s *DetailStorage) scanDetail(rows *sql.Rows) (*RequestDetail, error) {
+func (s *DetailStorage) scanDetail(rows *sql.Rows) (*RequestResult, error) {
 	var (
-		detail                               RequestDetail
-		nodeID                               string
+		detail                               RequestResult
 		timestamp, duration                  int64
 		success, skipped                     int
 		headersJSON, respHeadersJSON         string
@@ -397,9 +430,9 @@ func (s *DetailStorage) scanDetail(rows *sql.Rows) (*RequestDetail, error) {
 	)
 
 	err := rows.Scan(
-		&detail.ID, &nodeID, &detail.GroupID, &detail.APIName, &timestamp,
+		&detail.ID, &detail.NodeID, &detail.TaskID, &detail.GroupID, &detail.APIName, &timestamp,
 		&detail.URL, &detail.Method, &detail.Query, &headersJSON, &detail.Body,
-		&duration, &detail.StatusCode, &success, &skipped, &detail.Size, &detail.Error,
+		&duration, &detail.StatusCode, &success, &skipped, &detail.Size, &detail.ErrorMsg,
 		&detail.ResponseBody, &respHeadersJSON, &verificationsJSON, &extractedVarsJSON,
 	)
 	if err != nil {

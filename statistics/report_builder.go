@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2026-01-24 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-24 01:00:00
+ * @LastEditTime: 2026-01-25 22:51:17
  * @FilePath: \go-stress\statistics\report_builder.go
  * @Description: 报告构建器 - 职责分离的核心
  *
@@ -61,35 +61,38 @@ func (rb *ReportBuilder) BuildReport(totalTime time.Duration, includeDetails boo
 			FailedRequests:  failedReqs,
 			SkippedRequests: skippedReqs,
 			TotalTime:       totalTime,
-			MinDuration:     c.minDuration,
-			MaxDuration:     c.maxDuration,
+			MinLatency:      c.minDuration,
+			MaxLatency:      c.maxDuration,
 			TotalSize:       c.totalSize,
 			Errors:          errors,
 			StatusCodes:     statusCodes,
 			RequestDetails:  nil,       // 详情数据从SQLite按需加载
 			RunMode:         c.runMode, // 传递运行模式
+			Protocol:        c.protocol,
+			Concurrency:     c.concurrency,
+			TotalReqs:       c.totalReqs,
 		}
 	})
 
 	// 第三步：如果需要详情数据，从存储加载
 	if includeDetails {
-		report.RequestDetails = c.GetRequestDetails(0, 100000, StatusFilterAll) // 最多取10万条
+		report.RequestDetails = c.GetRequestDetails(0, 10000000, StatusFilterAll, "", "") // 最多取1000万条
 	}
 
 	// 第四步：在锁外进行耗时计算
 	if totalReqs > 0 {
 		report.SuccessRate = mathx.Percentage(successReqs, totalReqs)
-		report.AvgDuration = c.totalDuration / time.Duration(totalReqs)
+		report.AvgLatency = c.totalDuration / time.Duration(totalReqs)
 		report.QPS = float64(totalReqs) / totalTime.Seconds()
 	}
 
 	// 计算百分位（最耗时的操作，在锁外进行）
 	if len(c.durations) > 0 {
 		percentiles := mathx.Percentiles(c.durations, 50, 90, 95, 99)
-		report.P50 = time.Duration(percentiles[50] * float64(time.Second))
-		report.P90 = time.Duration(percentiles[90] * float64(time.Second))
-		report.P95 = time.Duration(percentiles[95] * float64(time.Second))
-		report.P99 = time.Duration(percentiles[99] * float64(time.Second))
+		report.P50Latency = time.Duration(percentiles[50] * float64(time.Second))
+		report.P90Latency = time.Duration(percentiles[90] * float64(time.Second))
+		report.P95Latency = time.Duration(percentiles[95] * float64(time.Second))
+		report.P99Latency = time.Duration(percentiles[99] * float64(time.Second))
 	}
 
 	return report
@@ -114,12 +117,12 @@ func (rb *ReportBuilder) BuildFullReportWithLimit(totalTime time.Duration, detai
 		detailsLimit = 10000000 // 1000万，实际上就是全部
 	} else if detailsLimit == 0 {
 		// 0 表示不导出详情
-		report.RequestDetails = []*RequestDetail{}
+		report.RequestDetails = []*RequestResult{}
 		return report
 	}
 
 	// 单独加载指定数量的详情
-	report.RequestDetails = rb.collector.GetRequestDetails(0, detailsLimit, StatusFilterAll)
+	report.RequestDetails = rb.collector.GetRequestDetails(0, detailsLimit, StatusFilterAll, "", "")
 
 	return report
 }

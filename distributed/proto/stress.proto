@@ -1,4 +1,4 @@
-syntax = "proto3";  // 指定使用 proto3 语法 | EN Specify to use proto3 syntax
+﻿syntax = "proto3";  // 指定使用 proto3 语法 | EN Specify to use proto3 syntax
 
 package stress;     // 定义包名，用于区分不同的 proto 文件 | EN Define package name to distinguish different proto files
 
@@ -25,7 +25,7 @@ enum TaskState {
   TASK_STATE_UNSPECIFIED = 0;  // 未指定状态 | EN Unspecified state
   TASK_STATE_PENDING = 1;      // 待执行：任务已下发，等待代理开始执行 | EN Pending: Task has been issued, waiting for agent to start execution
   TASK_STATE_RUNNING = 2;      // 运行中：任务正在执行 | EN Running: Task is being executed
-  TASK_STATE_COMPLETE = 3;     // 已完成：任务正常执行完毕 | EN Completed: Task finished execution normally
+  TASK_STATE_COMPLETED = 3;    // 已完成：任务正常执行完毕 | EN Completed: Task finished execution normally
   TASK_STATE_FAILED = 4;       // 执行失败：任务执行过程中出错 | EN Failed: Task encountered an error during execution
   TASK_STATE_STOPPED = 5;      // 已停止：任务被手动停止 | EN Stopped: Task was manually stopped
 }
@@ -54,6 +54,10 @@ service MasterService {
   // 从节点以流式方式向主节点上报压测统计数据（支持批量/实时上报） | EN Slave node reports stress test statistics to master node in streaming mode (supports batch/realtime reporting)
   rpc ReportStats(stream StatsData) returns (ReportResponse);
   
+  // 任务完成通知 | EN Task Completion Notification
+  // 从节点在任务执行完成后通知主节点更新任务状态 | EN Slave node notifies master node to update task status after task execution completes
+  rpc ReportTaskCompletion(TaskCompletionRequest) returns (TaskCompletionResponse);
+  
   // Slave 下线 | EN Slave Unregistration
   // 从节点主动向主节点发起下线请求，注销自身信息 | EN Slave node actively initiates unregistration request to master node to cancel its information
   rpc UnregisterSlave(UnregisterRequest) returns (UnregisterResponse);
@@ -77,6 +81,10 @@ service SlaveService {
   // 更新配置 | EN Update Configuration
   // 主节点向从节点下发配置更新指令（如修改系统参数） | EN Master node sends configuration update instructions to slave node (e.g., modify system parameters)
   rpc UpdateConfig(ConfigUpdate) returns (UpdateResponse);
+  
+  // 查询请求详情 | EN Query Request Details
+  // 主节点查询从节点的请求详情数据（支持分页和状态过滤） | EN Master node queries request details from slave node (supports pagination and status filtering)
+  rpc GetRequestDetails(DetailsRequest) returns (DetailsResponse);
 }
 
 // Slave 信息 | EN Slave Information
@@ -179,11 +187,11 @@ message SlaveStatus {
 message StatsData {
   string slave_id = 1;          // 从节点 ID | EN Slave node ID
   string task_id = 2;           // 任务 ID | EN Task ID
-  int64 timestamp = 3;          // 统计数据采集时间戳（毫秒） | EN Statistics collection timestamp (milliseconds)
+  int64 timestamp = 3;          // 统计数据采集时间戳(毫秒) | EN Statistics collection timestamp (milliseconds)
   int64 total_requests = 4;     // 累计请求总数 | EN Total cumulative requests
-  int64 success_count = 5;      // 成功请求数 | EN Number of successful requests
-  int64 failed_count = 6;       // 失败请求数 | EN Number of failed requests
-  double avg_latency = 7;       // 平均响应延迟（毫秒） | EN Average response latency (milliseconds)
+  int64 success_requests = 5;   // 成功请求数 | EN Number of successful requests
+  int64 failed_requests = 6;    // 失败请求数 | EN Number of failed requests
+  double avg_latency = 7;       // 平均响应延迟(毫秒) | EN Average response latency (milliseconds)
   double p95_latency = 8;       // P95 响应延迟（毫秒）：95%的请求延迟小于该值 | EN P95 response latency (milliseconds): 95% of requests have latency less than this value
   double p99_latency = 9;       // P99 响应延迟（毫秒）：99%的请求延迟小于该值 | EN P99 response latency (milliseconds): 99% of requests have latency less than this value
   double min_latency = 10;      // 最小响应延迟（毫秒） | EN Minimum response latency (milliseconds)
@@ -198,6 +206,23 @@ message StatsData {
 message ReportResponse {
   bool received = 1;            // 数据是否成功接收 | EN Whether data is received successfully
   string message = 2;           // 接收结果描述 | EN Description of reception result
+}
+
+// 任务完成请求 | EN Task Completion Request
+// 从节点向主节点报告任务执行完成的请求参数 | EN Request parameters for slave node to report task execution completion to master node
+message TaskCompletionRequest {
+  string slave_id = 1;          // 从节点 ID | EN Slave node ID
+  string task_id = 2;           // 任务 ID | EN Task ID
+  bool success = 3;             // 任务是否成功完成 | EN Whether task completed successfully
+  string error_message = 4;     // 失败原因（仅在success=false时有效） | EN Failure reason (only valid when success=false)
+  int64 completed_at = 5;       // 任务完成时间戳（毫秒） | EN Task completion timestamp (milliseconds)
+}
+
+// 任务完成响应 | EN Task Completion Response
+// 主节点对任务完成通知的响应 | EN Master node's response to task completion notification
+message TaskCompletionResponse {
+  bool acknowledged = 1;        // 是否确认接收 | EN Whether receipt is acknowledged
+  string message = 2;           // 响应描述信息 | EN Response description information
 }
 
 // 下线请求 | EN Unregister Request
@@ -226,4 +251,53 @@ message ConfigUpdate {
 message UpdateResponse {
   bool success = 1;             // 配置更新是否成功 | EN Whether configuration update is successful
   string message = 2;           // 更新结果描述（失败时说明原因） | EN Description of update result (explain reason if failed)
+}
+
+// 详情查询请求 | EN Details Query Request
+// 主节点查询从节点请求详情的请求参数 | EN Request parameters for master node to query slave node request details
+message DetailsRequest {
+  string slave_id = 1;          // 从节点 ID | EN Slave node ID
+  string task_id = 2;           // 任务 ID | EN Task ID
+  int32 offset = 3;             // 分页偏移量（从0开始） | EN Pagination offset (starting from 0)
+  int32 limit = 4;              // 每页数量（最大1000） | EN Number of items per page (max 1000)
+  string status = 5;            // 状态过滤：all | success | failed | skipped | EN Status filter: all | success | failed | skipped
+}
+
+// 请求详情 | EN Request Detail
+// 单个请求的详细信息 | EN Detailed information of a single request
+message RequestDetail {
+  string id = 1;                // 详情记录 ID | EN Detail record ID
+  string slave_id = 2;          // 从节点 ID | EN Slave node ID
+  string task_id = 3;           // 任务 ID | EN Task ID
+  int64 timestamp = 4;          // 请求时间戳（Unix毫秒） | EN Request timestamp (Unix milliseconds)
+  int64 duration = 5;           // 响应时长（纳秒） | EN Response duration (nanoseconds)
+  int32 status_code = 6;        // 响应状态码 | EN Response status code
+  bool success = 7;             // 是否成功 | EN Whether successful
+  bool skipped = 8;             // 是否跳过 | EN Whether skipped
+  string skip_reason = 9;       // 跳过原因 | EN Skip reason
+  uint64 group_id = 10;          // 分组 ID | EN Group ID
+  string api_name = 11;          // API 名称 | EN API name
+  string error = 12;            // 错误信息 | EN Error message
+  double size = 13;             // 响应大小 | EN Response size
+  string url = 14;              // 请求 URL | EN Request URL
+  string method = 15;           // 请求方法 | EN Request method
+  string query = 16;            // Query 参数 | EN Query parameters
+  map<string, string> headers = 17;           // 请求头 | EN Request headers
+  string body = 18;             // 请求体 | EN Request body
+  string response_body = 19;    // 响应体 | EN Response body
+  map<string, string> response_headers = 20;  // 响应头 | EN Response headers
+  map<string, string> extracted_vars = 21;    // 提取的变量 | EN Extracted variables
+}
+
+// 详情查询响应 | EN Details Query Response
+// 从节点返回的请求详情列表 | EN List of request details returned by slave node
+message DetailsResponse {
+  int32 total = 1;              // 总记录数（满足过滤条件的） | EN Total number of records (matching filter conditions)
+  int32 offset = 2;             // 当前偏移量 | EN Current offset
+  int32 limit = 3;              // 每页数量 | EN Number of items per page
+  repeated RequestDetail details = 4; // 详情记录列表 | EN List of detail records
+  int64 total_requests = 5;     // 真实总请求数 | EN Real total number of requests
+  int64 success_count = 6;      // 真实成功数 | EN Real number of successful requests
+  int64 failed_count = 7;       // 真实失败数 | EN Real number of failed requests
+  int64 skipped_count = 8;      // 真实跳过数 | EN Real number of skipped requests
 }

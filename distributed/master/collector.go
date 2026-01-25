@@ -48,7 +48,7 @@ func (sc *StatsCollector) Collect(stats *common.SlaveStats) error {
 	case sc.buffer <- stats:
 		return nil
 	default:
-		sc.logger.Warn("Stats buffer full, dropping data", "slave_id", stats.SlaveID)
+		sc.logger.WarnKV("Stats buffer full, dropping data", "slave_id", stats.SlaveID)
 		return nil
 	}
 }
@@ -128,4 +128,63 @@ func (sc *StatsCollector) Clear() {
 // GetAggregator 获取聚合器
 func (sc *StatsCollector) GetAggregator() *DataAggregator {
 	return sc.aggregator
+}
+
+// GetAggregatedStats 获取聚合统计数据（所有任务）
+func (sc *StatsCollector) GetAggregatedStats() *common.AggregatedStats {
+	if sc.aggregator == nil {
+		return &common.AggregatedStats{}
+	}
+
+	// 获取所有任务的聚合数据
+	allAggs := sc.aggregator.GetAllAggregations()
+
+	// 如果没有数据,返回空统计
+	if len(allAggs) == 0 {
+		return &common.AggregatedStats{}
+	}
+
+	// 如果只有一个任务,直接返回
+	if len(allAggs) == 1 {
+		for _, agg := range allAggs {
+			return agg
+		}
+	}
+
+	// 多个任务时,合并所有统计
+	merged := &common.AggregatedStats{
+		StatusCodes: make(map[int]int64),
+		ErrorTypes:  make(map[string]int64),
+		BySlave:     make(map[string]*common.SlaveStats),
+	}
+
+	for _, agg := range allAggs {
+		merged.TotalRequests += agg.TotalRequests
+		merged.SuccessRequests += agg.SuccessRequests
+		merged.FailedRequests += agg.FailedRequests
+		merged.TotalQPS += agg.TotalQPS
+		merged.TotalAgents += agg.TotalAgents
+
+		// 合并状态码
+		for code, count := range agg.StatusCodes {
+			merged.StatusCodes[code] += count
+		}
+
+		// 合并错误类型
+		for errType, count := range agg.ErrorTypes {
+			merged.ErrorTypes[errType] += count
+		}
+
+		// 合并 Slave 数据
+		for slaveID, stats := range agg.BySlave {
+			merged.BySlave[slaveID] = stats
+		}
+	}
+
+	// 重新计算成功率
+	if merged.TotalRequests > 0 {
+		merged.SuccessRate = float64(merged.SuccessRequests) / float64(merged.TotalRequests) * 100
+	}
+
+	return merged
 }

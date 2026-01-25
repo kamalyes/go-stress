@@ -22,12 +22,14 @@ import (
 
 // TaskQueue 任务队列
 type TaskQueue struct {
-	mu           *syncx.RWLock // 使用 syncx.RWLock 替代 sync.RWMutex
-	pending      []*common.Task
-	pendingIndex map[string]int // taskID -> pending 数组索引，加速查找
-	running      map[string]*common.Task
-	complete     map[string]*common.Task
-	failed       map[string]*common.Task
+	mu           *syncx.RWLock           // 使用 syncx.RWLock 替代 sync.RWMutex
+	pending      []*common.Task          // 待执行任务队列
+	pendingIndex map[string]int          // taskID -> pending 数组索引，加速查找
+	running      map[string]*common.Task // 运行中任务
+	complete     map[string]*common.Task // 已完成任务
+	failed       map[string]*common.Task // 失败任务
+	stopped      map[string]*common.Task // 已停止任务
+	allTasks     map[string]*common.Task // 所有任务的统一索引 (O1 查询)
 	splitter     TaskSplitter
 	logger       logger.ILogger
 }
@@ -41,6 +43,8 @@ func NewTaskQueue(splitter TaskSplitter, log logger.ILogger) *TaskQueue {
 		running:      make(map[string]*common.Task),
 		complete:     make(map[string]*common.Task),
 		failed:       make(map[string]*common.Task),
+		stopped:      make(map[string]*common.Task),
+		allTasks:     make(map[string]*common.Task),
 		splitter:     splitter,
 		logger:       log,
 	}
@@ -53,8 +57,9 @@ func (tq *TaskQueue) Submit(task *common.Task) error {
 		task.CreatedAt = time.Now()
 		tq.pendingIndex[task.ID] = len(tq.pending)
 		tq.pending = append(tq.pending, task)
+		tq.allTasks[task.ID] = task
 
-		tq.logger.Info("Task submitted", "task_id", task.ID, "workers", task.TotalWorkers)
+		tq.logger.InfoKV("Task submitted", "task_id", task.ID, "workers", task.TotalWorkers)
 		return nil
 	})
 }
@@ -110,7 +115,7 @@ func (tq *TaskQueue) MoveToRunning(taskID string) error {
 			tq.pendingIndex[tq.pending[j].ID] = j
 		}
 
-		tq.logger.Info("Task started", "task_id", taskID)
+		tq.logger.InfoKV("Task started", "task_id", taskID)
 		return nil
 	})
 }
@@ -118,17 +123,29 @@ func (tq *TaskQueue) MoveToRunning(taskID string) error {
 // MoveToComplete 将任务移动到完成
 func (tq *TaskQueue) MoveToComplete(taskID string) error {
 	return syncx.WithLockReturnValue(tq.mu, func() error {
+		// 检查任务是否已经处于终态
+		if _, exists := tq.complete[taskID]; exists {
+			tq.logger.WarnKV("Task is already completed", "task_id", taskID)
+			return nil // 幂等操作，不报错
+		}
+		if _, exists := tq.failed[taskID]; exists {
+			return fmt.Errorf("task %s is already failed, cannot mark as completed", taskID)
+		}
+		if _, exists := tq.stopped[taskID]; exists {
+			return fmt.Errorf("task %s is already stopped, cannot mark as complete", taskID)
+		}
+
 		task, exists := tq.running[taskID]
 		if !exists {
 			return fmt.Errorf("task %s not found in running queue", taskID)
 		}
 
-		task.State = common.TaskStateComplete
+		task.State = common.TaskStateCompleted
 		task.CompletedAt = time.Now()
 		tq.complete[taskID] = task
 		delete(tq.running, taskID)
 
-		tq.logger.Info("Task completed",
+		tq.logger.InfoKV("Task completed",
 			"task_id", taskID,
 			"duration", task.CompletedAt.Sub(task.StartedAt))
 		return nil
@@ -138,6 +155,18 @@ func (tq *TaskQueue) MoveToComplete(taskID string) error {
 // MoveToFailed 将任务移动到失败
 func (tq *TaskQueue) MoveToFailed(taskID string, reason string) error {
 	return syncx.WithLockReturnValue(tq.mu, func() error {
+		// 检查任务是否已经处于终态
+		if _, exists := tq.complete[taskID]; exists {
+			return fmt.Errorf("task %s is already completed, cannot mark as failed", taskID)
+		}
+		if _, exists := tq.failed[taskID]; exists {
+			tq.logger.WarnKV("Task is already failed", "task_id", taskID, "reason", reason)
+			return nil // 幂等操作，不报错
+		}
+		if _, exists := tq.stopped[taskID]; exists {
+			return fmt.Errorf("task %s is already stopped, cannot mark as failed", taskID)
+		}
+
 		task, exists := tq.running[taskID]
 		if !exists {
 			return fmt.Errorf("task %s not found in running queue", taskID)
@@ -152,29 +181,16 @@ func (tq *TaskQueue) MoveToFailed(taskID string, reason string) error {
 		tq.failed[taskID] = task
 		delete(tq.running, taskID)
 
-		tq.logger.Error("Task failed", "task_id", taskID, "reason", reason)
+		tq.logger.ErrorKV("Task failed", "task_id", taskID, "reason", reason)
 		return nil
 	})
 }
 
-// Get 获取任务
+// Get 获取任务 (O(1))
 func (tq *TaskQueue) Get(taskID string) (*common.Task, bool) {
 	return syncx.WithRLockReturnWithE(tq.mu, func() (*common.Task, bool) {
-		// 依次在各个队列中查找 - 按访问频率排序
-		if task, exists := tq.running[taskID]; exists {
-			return task, true
-		}
-		// 使用索引快速查找 pending
-		if idx, exists := tq.pendingIndex[taskID]; exists {
-			return tq.pending[idx], true
-		}
-		if task, exists := tq.complete[taskID]; exists {
-			return task, true
-		}
-		if task, exists := tq.failed[taskID]; exists {
-			return task, true
-		}
-		return nil, false
+		task, exists := tq.allTasks[taskID]
+		return task, exists
 	})
 }
 
@@ -183,6 +199,17 @@ func (tq *TaskQueue) GetRunning() []*common.Task {
 	return syncx.WithRLockReturnValue(tq.mu, func() []*common.Task {
 		tasks := make([]*common.Task, 0, len(tq.running))
 		for _, task := range tq.running {
+			tasks = append(tasks, task)
+		}
+		return tasks
+	})
+}
+
+// GetAllTasks 获取所有任务（O(n) 复制但只遍历一次）
+func (tq *TaskQueue) GetAllTasks() []*common.Task {
+	return syncx.WithRLockReturnValue(tq.mu, func() []*common.Task {
+		tasks := make([]*common.Task, 0, len(tq.allTasks))
+		for _, task := range tq.allTasks {
 			tasks = append(tasks, task)
 		}
 		return tasks
@@ -200,10 +227,27 @@ func (tq *TaskQueue) Split(task *common.Task, slaves []*common.SlaveInfo) ([]*co
 // Cancel 取消任务
 func (tq *TaskQueue) Cancel(taskID string) error {
 	return syncx.WithLockReturnValue(tq.mu, func() error {
+		// 检查任务是否已经处于终态（不允许再停止）
+		if _, exists := tq.complete[taskID]; exists {
+			return fmt.Errorf("task %s is already completed, cannot stop", taskID)
+		}
+		if _, exists := tq.failed[taskID]; exists {
+			return fmt.Errorf("task %s is already failed, cannot stop", taskID)
+		}
+		if _, exists := tq.stopped[taskID]; exists {
+			return fmt.Errorf("task %s is already stopped", taskID)
+		}
+
 		// 使用索引快速查找 pending
 		if i, exists := tq.pendingIndex[taskID]; exists {
 			task := tq.pending[i]
 			task.State = common.TaskStateStopped
+			task.CompletedAt = time.Now()
+
+			// 移动到 stopped 队列
+			tq.stopped[taskID] = task
+
+			// 从 pending 中移除
 			tq.pending = append(tq.pending[:i], tq.pending[i+1:]...)
 			delete(tq.pendingIndex, taskID)
 
@@ -212,7 +256,7 @@ func (tq *TaskQueue) Cancel(taskID string) error {
 				tq.pendingIndex[tq.pending[j].ID] = j
 			}
 
-			tq.logger.Info("Task cancelled", "task_id", taskID)
+			tq.logger.InfoKV("Task cancelled from pending", "task_id", taskID)
 			return nil
 		}
 
@@ -220,12 +264,16 @@ func (tq *TaskQueue) Cancel(taskID string) error {
 		if task, exists := tq.running[taskID]; exists {
 			task.State = common.TaskStateStopped
 			task.CompletedAt = time.Now()
+
+			// 移动到 stopped 队列
+			tq.stopped[taskID] = task
 			delete(tq.running, taskID)
-			tq.logger.Info("Task stopped", "task_id", taskID)
+
+			tq.logger.InfoKV("Task stopped from running", "task_id", taskID)
 			return nil
 		}
 
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("task %s not found in pending or running", taskID)
 	})
 }
 
@@ -237,6 +285,7 @@ func (tq *TaskQueue) Stats() map[string]int {
 			"running":  len(tq.running),
 			"complete": len(tq.complete),
 			"failed":   len(tq.failed),
+			"stopped":  len(tq.stopped),
 		}
 	})
 }
@@ -250,6 +299,7 @@ func (tq *TaskQueue) Clean(maxAge time.Duration) {
 		for id, task := range tq.complete {
 			if now.Sub(task.CompletedAt) > maxAge {
 				delete(tq.complete, id)
+				delete(tq.allTasks, id)
 			}
 		}
 
@@ -257,6 +307,7 @@ func (tq *TaskQueue) Clean(maxAge time.Duration) {
 		for id, task := range tq.failed {
 			if now.Sub(task.CompletedAt) > maxAge {
 				delete(tq.failed, id)
+				delete(tq.allTasks, id)
 			}
 		}
 	})

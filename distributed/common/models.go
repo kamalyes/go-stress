@@ -19,7 +19,8 @@ type SlaveInfo struct {
 	ID              string            `json:"id"`
 	Hostname        string            `json:"hostname"`
 	IP              string            `json:"ip"`
-	GRPCPort        int32             `json:"grpc_port"` // gRPC 服务端口
+	GRPCPort        int32             `json:"grpc_port"`     // gRPC 服务端口
+	RealtimePort    int               `json:"realtime_port"` // 实时报告服务器端口
 	CPUCores        int               `json:"cpu_cores"`
 	Memory          int64             `json:"memory"`
 	Version         string            `json:"version"`

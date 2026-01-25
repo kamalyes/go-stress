@@ -125,19 +125,34 @@ go build -o go-stress .
 ### 🌐 分布式压测 - 轻松扩展到多台机器
 
 ```bash
-# Master 节点 - 协调和收集结果（运行在 192.168.1.100）
-./go-stress -mode master -config config.yaml -grpc-port 9090 -http-port 8080
+# 1. 启动 Master 节点 - 协调和收集结果
+./go-stress -mode master -grpc-port 9090 -http-port 8080
 
-# Slave 节点 - 在不同机器/区域运行
-# 北京机房（192.168.1.101）
-./go-stress -mode slave -master 192.168.1.100:9090 -region beijing
+# 2. 启动 Slave 节点 - 在不同机器/区域运行
+# 北京机房
+./go-stress -mode slave -master master-ip:9090 -region beijing -slave-id slave-bj-1
 
-# 上海机房（192.168.1.102）
-./go-stress -mode slave -master 192.168.1.100:9090 -region shanghai
+# 上海机房
+./go-stress -mode slave -master master-ip:9090 -region shanghai -slave-id slave-sh-1
+
 
 # 广州机房（192.168.1.103）
-./go-stress -mode slave -master 192.168.1.100:9090 -region guangzhou
+./go-stress -mode slave -master master-ip:9090 -region guangzhou -slave-id slave-gz-1
+
+# 3. 访问管理界面创建和启动任务
+# http://master-ip:8080
+#   - 创建任务（上传配置文件或粘贴 JSON）
+#   - 点击"启动任务"按钮
+#   - 选择要使用的 Slave 节点或区域
+#   - 查看实时执行情况和详细数据
 ```
+
+**工作流程**：
+
+1. **创建任务** - 提交配置，任务状态为"待执行"
+2. **启动任务** - 手动启动，可选择特定 Slave 或区域
+3. **执行压测** - 所有选定的 Slave 并行执行
+4. **查看结果** - 实时监控和详情数据查询
 
 **📖 [分布式压测完整指南 →](docs/DISTRIBUTED_MODE.md)**
 
@@ -186,6 +201,30 @@ realtime:
   port: 8088
 ```
 
+### 🌐 WebSocket 压测
+
+```bash
+# 命令行方式
+./go-stress -protocol websocket \
+  -url ws://localhost:8080/ws \
+  -body '{"action":"ping","data":"test"}' \
+  -c 50 -n 1000
+
+# 配置文件方式
+# config.yaml:
+protocol: websocket
+url: ws://localhost:8080/ws
+body: |
+  {
+    "message_id": {{seq}},
+    "action": "chat",
+    "user_id": {{randomInt 1000 9999}},
+    "content": "Message {{seq}}"
+  }
+concurrency: 50
+requests: 1000
+```
+
 **📖 [配置文件完整说明 →](docs/CONFIG_FILE.md)**
 
 ## 🤝 贡献
@@ -216,6 +255,7 @@ realtime:
 | 🔒 | security | 安全修复 |
 | 🔥 | remove | 删除代码 |
 **示例：** `git commit -m "✨ feat(executor): 新增中间件链支持"`
+
 </details>
 
 ## 📄 许可证

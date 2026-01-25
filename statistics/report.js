@@ -102,6 +102,16 @@ const VERIFY_STATUS = {
   }
 };
 
+// ============ 协议图标和样式映射 ============
+const PROTOCOL_STYLES = {
+  http: { icon: '🌐', class: 'protocol-http', name: 'HTTP' },
+  https: { icon: '🔒', class: 'protocol-https', name: 'HTTPS' },
+  grpc: { icon: '⚡', class: 'protocol-grpc', name: 'gRPC' },
+  websocket: { icon: '📡', class: 'protocol-websocket', name: 'WebSocket' },
+  ws: { icon: '📡', class: 'protocol-websocket', name: 'WebSocket' },
+  wss: { icon: '🔐', class: 'protocol-wss', name: 'WebSocket (Secure)' }
+};
+
 // ============ HTTP 方法样式映射 (Swagger风格) ============
 const HTTP_METHOD_STYLES = {
   GET: 'http-method-get',
@@ -112,6 +122,44 @@ const HTTP_METHOD_STYLES = {
   HEAD: 'http-method-head',
   OPTIONS: 'http-method-options'
 };
+
+// ============ 控制状态常量 ============
+const CONTROL_STATUS = {
+  RUNNING: {
+    pauseBtn: { text: '⏸ 暂停', bg: '#ffc107', color: '#333' },
+    statusText: '实时监控中',
+    statusDot: { bg: '#38ef7d', animation: 'pulse 2s infinite' }
+  },
+  PAUSED: {
+    pauseBtn: { text: '▶ 恢复', bg: '#28a745', color: 'white' },
+    statusText: '已暂停',
+    statusDot: { bg: '#ffc107', animation: 'none' }
+  },
+  STOPPED: {
+    statusText: '已停止',
+    statusDot: { bg: '#dc3545', animation: 'none' }
+  }
+};
+
+// ============ API 端点常量 ============
+const API_ENDPOINTS = {
+  PAUSE: '/api/pause',
+  RESUME: '/api/resume',
+  STOP: '/api/stop'
+};
+
+// ============ 格式化常量 ============
+const FORMAT_CONFIG = {
+  DECIMAL_PLACES: 2,           // 小数位数
+  BYTES_UNIT: 1024,           // 字节单位换算基数
+  MS_TO_NS: 1000000,          // 毫秒转纳秒
+  MS_TO_SEC: 1000,            // 毫秒转秒
+  RESPONSE_TRUNCATE: 2000,    // 响应内容截断长度
+  DEFAULT_PAGE_SIZE: 20       // 默认分页大小
+};
+
+// ============ 文件大小单位 ============
+const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 
 // 格式化 HTTP 方法为带样式的标签
 function formatHttpMethod(method) {
@@ -126,20 +174,31 @@ const isRealtime = (typeof IS_REALTIME_PLACEHOLDER !== 'undefined' && IS_REALTIM
 const jsonFilename = "JSON_FILENAME_PLACEHOLDER" || "index.json";
 let serverTotal = 0; // 服务器返回的真实总数（用于实时模式分页显示）
 
+// 从 URL 获取参数
+const urlParams = new URLSearchParams(window.location.search);
+const slaveId = urlParams.get('slave_id') || ''; // 分布式模式下的 slave_id
+const realtimeUrl = urlParams.get('realtime_url') || ''; // Slave 实时报告服务器地址（如 http://localhost:8088）
+
 console.log('运行模式:', isRealtime ? '实时模式' : '静态模式');
+if (slaveId) {
+  console.log('Slave ID:', slaveId);
+}
+if (realtimeUrl) {
+  console.log('实时报告服务器:', realtimeUrl);
+}
 
 // 全局变量存储所有数据
 let allDetailsData = [];
 let currentTab = TAB_NAMES.ALL;
 let currentPage = 1;
-let pageSize = 20;
+let pageSize = FORMAT_CONFIG.DEFAULT_PAGE_SIZE;
 let filteredData = [];
 let isPaused = false;
 
 // ============ 全局函数（供HTML内联调用） ============
 // 控制函数（暂停/恢复/停止）
 window.togglePause = function() {
-  const endpoint = isPaused ? '/api/resume' : '/api/pause';
+  const endpoint = isPaused ? API_ENDPOINTS.RESUME : API_ENDPOINTS.PAUSE;
   const pauseBtn = document.getElementById(ELEMENT_IDS.PAUSE_BTN);
   const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
   const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
@@ -149,21 +208,14 @@ window.togglePause = function() {
     .then(data => {
       if (data.success) {
         isPaused = !isPaused;
-        if (isPaused) {
-          pauseBtn.textContent = '▶ 恢复';
-          pauseBtn.style.background = '#28a745';
-          pauseBtn.style.color = 'white';
-          statusText.textContent = '已暂停';
-          statusDot.style.background = '#ffc107';
-          statusDot.style.animation = 'none';
-        } else {
-          pauseBtn.textContent = '⏸ 暂停';
-          pauseBtn.style.background = '#ffc107';
-          pauseBtn.style.color = '#333';
-          statusText.textContent = '实时监控中';
-          statusDot.style.background = '#38ef7d';
-          statusDot.style.animation = 'pulse 2s infinite';
-        }
+        const status = isPaused ? CONTROL_STATUS.PAUSED : CONTROL_STATUS.RUNNING;
+        
+        pauseBtn.textContent = status.pauseBtn.text;
+        pauseBtn.style.background = status.pauseBtn.bg;
+        pauseBtn.style.color = status.pauseBtn.color;
+        statusText.textContent = status.statusText;
+        statusDot.style.background = status.statusDot.bg;
+        statusDot.style.animation = status.statusDot.animation;
       }
     })
     .catch(err => console.error('控制操作失败:', err));
@@ -179,7 +231,7 @@ window.stopMonitoring = function() {
   const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
   const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
   
-  fetch('/api/stop', { method: 'POST' })
+  fetch(API_ENDPOINTS.STOP, { method: 'POST' })
     .then(response => response.json())
     .then(data => {
       if (data.success) {
@@ -187,9 +239,9 @@ window.stopMonitoring = function() {
         pauseBtn.disabled = true;
         stopBtn.style.opacity = '0.5';
         pauseBtn.style.opacity = '0.5';
-        statusText.textContent = '已停止';
-        statusDot.style.background = '#dc3545';
-        statusDot.style.animation = 'none';
+        statusText.textContent = CONTROL_STATUS.STOPPED.statusText;
+        statusDot.style.background = CONTROL_STATUS.STOPPED.statusDot.bg;
+        statusDot.style.animation = CONTROL_STATUS.STOPPED.statusDot.animation;
         alert('压测已停止！');
       }
     })
@@ -356,17 +408,17 @@ function updateStaticMetrics(data) {
   setTextContent(ELEMENT_IDS.SKIPPED_REQUESTS, data.skipped_requests || 0);
   setTextContent(ELEMENT_IDS.SUCCESS_RATE, (data.success_rate || 0).toFixed(2) + "%");
   setTextContent(ELEMENT_IDS.QPS, (data.qps || 0).toFixed(2));
-  setTextContent(ELEMENT_IDS.AVG_DURATION, (data.avg_duration_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.AVG_DURATION, (data.avg_latency || 0).toFixed(2) + "ms");
   
   // 响应时间统计
-  setTextContent(ELEMENT_IDS.MIN_DURATION, (data.min_duration_ms || 0).toFixed(2) + "ms");
-  setTextContent(ELEMENT_IDS.MAX_DURATION, (data.max_duration_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.MIN_DURATION, (data.min_latency || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.MAX_DURATION, (data.max_latency || 0).toFixed(2) + "ms");
   
   // 百分位统计
-  setTextContent(ELEMENT_IDS.P50, (data.p50_ms || 0).toFixed(2) + "ms");
-  setTextContent(ELEMENT_IDS.P90, (data.p90_ms || 0).toFixed(2) + "ms");
-  setTextContent(ELEMENT_IDS.P95, (data.p95_ms || 0).toFixed(2) + "ms");
-  setTextContent(ELEMENT_IDS.P99, (data.p99_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P50, (data.p50_latency || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P90, (data.p90_latency || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P95, (data.p95_latency || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P99, (data.p99_latency || 0).toFixed(2) + "ms");
   
   // 静态报告特有的：测试时长（使用total_time）
   const totalTimeSec = data.total_time_ms ? (data.total_time_ms / 1000).toFixed(2) : 0;
@@ -759,10 +811,9 @@ function toggleDetails(detailsId) {
 
 function formatBytes(bytes) {
   if (bytes === 0) return "0B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
+  const k = FORMAT_CONFIG.BYTES_UNIT;
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return (bytes / Math.pow(k, i)).toFixed(2) + sizes[i];
+  return (bytes / Math.pow(k, i)).toFixed(FORMAT_CONFIG.DECIMAL_PLACES) + SIZE_UNITS[i];
 }
 
 function copyToClipboard(elementId, btnElement) {
@@ -1144,19 +1195,19 @@ if (isRealtime) {
       (data.success_rate || 0).toFixed(2) + "%";
     document.getElementById(ELEMENT_IDS.QPS).textContent = (data.qps || 0).toFixed(2);
     document.getElementById(ELEMENT_IDS.AVG_DURATION).textContent =
-      (data.avg_duration_ms || 0).toFixed(2) + "ms";
+      (data.avg_latency || 0).toFixed(2) + "ms";
     
     // 响应时间统计
     document.getElementById(ELEMENT_IDS.MIN_DURATION).textContent =
-      (data.min_duration_ms || 0).toFixed(2) + "ms";
+      (data.min_latency || 0).toFixed(2) + "ms";
     document.getElementById(ELEMENT_IDS.MAX_DURATION).textContent =
-      (data.max_duration_ms || 0).toFixed(2) + "ms";
+      (data.max_latency || 0).toFixed(2) + "ms";
     
     // 百分位统计
-    document.getElementById(ELEMENT_IDS.P50).textContent = (data.p50_ms || 0).toFixed(2) + "ms";
-    document.getElementById(ELEMENT_IDS.P90).textContent = (data.p90_ms || 0).toFixed(2) + "ms";
-    document.getElementById(ELEMENT_IDS.P95).textContent = (data.p95_ms || 0).toFixed(2) + "ms";
-    document.getElementById(ELEMENT_IDS.P99).textContent = (data.p99_ms || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P50).textContent = (data.p50_latency || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P90).textContent = (data.p90_latency || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P95).textContent = (data.p95_latency || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P99).textContent = (data.p99_latency || 0).toFixed(2) + "ms";
     
     document.getElementById(ELEMENT_IDS.ELAPSED).textContent = (data.elapsed_seconds || 0) + "s";
     
@@ -1268,7 +1319,24 @@ if (isRealtime) {
     const offset = (currentPage - 1) * pageSize;
     const status = currentTab === TAB_NAMES.ALL ? TAB_NAMES.ALL : currentTab; // all/success/failed/skipped
     
-    fetch(`/api/details?status=${status}&offset=${offset}&limit=${pageSize}`)
+    // 构建查询参数
+    const params = new URLSearchParams({
+      status: status,
+      offset: offset,
+      limit: pageSize
+    });
+    
+    // 如果有 slave_id，添加到查询参数
+    if (slaveId) {
+      params.append('slave_id', slaveId);
+    }
+    
+    // 构建 API 地址：优先使用 realtime_url（分布式模式），否则使用相对路径（单机模式）
+    const apiUrl = realtimeUrl 
+      ? `${realtimeUrl}/api/details?${params.toString()}`
+      : `/api/details?${params.toString()}`;
+    
+    fetch(apiUrl)
       .then((res) => res.json())
       .then((data) => {
         // 更新全局统计计数器（用于Tab标签显示和分页计算）

@@ -19,4 +19,5 @@ type (
 	RequestResult      = types.RequestResult
 	Statistics         = types.Statistics
 	VerificationResult = types.VerificationResult
+	RunMode            = types.RunMode
 )

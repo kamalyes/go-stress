@@ -14,7 +14,42 @@ go run test_server.go
 
 服务器将在 `http://localhost:3000` 启动
 
-### API 端点
+### 📡 WebSocket 端点
+
+| 端点 | 协议 | 说明 | 配置文件 |
+|------|------|------|----------|
+| `/ws` | WebSocket | 通用服务 (ping/echo/info) | `websocket-test.yaml` |
+| `/ws/echo` | WebSocket | 回声服务器 | `websocket-echo.yaml` |
+| `/ws/chat` | WebSocket | 聊天室模拟 | `websocket-chat.yaml` |
+
+#### WebSocket 压测示例
+
+```bash
+# 1️⃣ 启动测试服务器（新终端）
+cd testserver
+go run test_server.go
+
+# 2️⃣ 运行压测（另一个终端）
+# 快速测试（5并发 20请求）
+go-stress -config testserver/websocket-quick.yaml
+
+# 通用 WebSocket 服务（10并发 100请求）
+go-stress -config testserver/websocket-test.yaml
+
+# 回声服务（20并发 500请求）
+go-stress -config testserver/websocket-echo.yaml
+
+# 聊天室压测（50并发 1000请求）
+go-stress -config testserver/websocket-chat.yaml
+
+# 命令行方式
+go-stress -protocol websocket -url ws://localhost:3000/ws \
+  -body '{"action":"ping","message_id":1}' -c 10 -n 100
+```
+
+**💡 提示**: 确保测试服务器在 `http://localhost:3000` 运行
+
+### 🔗 HTTP API 端点
 
 | 端点 | 方法 | 说明 | 认证 |
 |------|------|------|------|

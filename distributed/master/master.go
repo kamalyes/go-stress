@@ -34,6 +34,7 @@ type Master struct {
 	taskQueue    *TaskQueue
 	collector    *StatsCollector
 	grpcServer   *grpc.Server
+	httpServer   *HTTPServer                               // HTTP 服务器（分布式管理）
 	slaveClients *syncx.Map[string, pb.SlaveServiceClient] // 使用 syncx.Map 管理 slave_id -> client
 	idGenerator  *idgen.SnowflakeGenerator                 // ID 生成器
 	logger       logger.ILogger
@@ -47,6 +48,16 @@ func NewMaster(config *common.MasterConfig, log logger.ILogger) (*Master, error)
 		return nil, fmt.Errorf("config cannot be nil")
 	}
 
+	// 使用 mathx 工具函数对配置做兜底处理
+	config.HeartbeatInterval = mathx.IfEmpty(config.HeartbeatInterval, 5*time.Second)
+	config.HeartbeatTimeout = mathx.IfEmpty(config.HeartbeatTimeout, 15*time.Second)
+	config.MaxFailures = mathx.IfNotZero(config.MaxFailures, 3)
+	config.Secret = mathx.IfEmpty(config.Secret, "go-stress-secret-key")
+	config.TokenExpiration = mathx.IfEmpty(config.TokenExpiration, 24*time.Hour)
+	config.TokenIssuer = mathx.IfEmpty(config.TokenIssuer, "go-stress-master")
+	config.WorkersPerSlave = mathx.IfNotZero(config.WorkersPerSlave, 100)
+	config.MinSlaveCount = mathx.IfNotZero(config.MinSlaveCount, 1)
+
 	// 创建 Slave 选择器
 	selector := GetSelector(common.SelectStrategyLeastLoaded, nil)
 
@@ -55,7 +66,7 @@ func NewMaster(config *common.MasterConfig, log logger.ILogger) (*Master, error)
 
 	master := &Master{
 		config:       config,
-		slavePool:    NewSlavePool(selector, log),
+		slavePool:    NewSlavePool(selector, config.HeartbeatInterval, config.HeartbeatTimeout, config.MaxFailures, log),
 		taskQueue:    NewTaskQueue(splitter, log),
 		collector:    NewStatsCollector(1000, log),
 		slaveClients: syncx.NewMap[string, pb.SlaveServiceClient](),
@@ -87,7 +98,15 @@ func (m *Master) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start gRPC server: %w", err)
 	}
 
-	m.logger.Info("Master started successfully",
+	// 启动 HTTP 服务器（分布式管理）
+	if m.config.HTTPPort > 0 {
+		m.httpServer = NewHTTPServer(m, m.config.HTTPPort, m.logger)
+		if err := m.httpServer.Start(); err != nil {
+			return fmt.Errorf("failed to start HTTP server: %w", err)
+		}
+	}
+
+	m.logger.InfoKV("Master started successfully",
 		"grpc_port", m.config.GRPCPort,
 		"http_port", m.config.HTTPPort)
 
@@ -105,6 +124,13 @@ func (m *Master) Stop() error {
 	// 停止所有组件
 	if m.cancelFunc != nil {
 		m.cancelFunc()
+	}
+
+	// 停止 HTTP 服务器
+	if m.httpServer != nil {
+		if err := m.httpServer.Stop(); err != nil {
+			m.logger.ErrorKV("Failed to stop HTTP server", "error", err)
+		}
 	}
 
 	// 停止 gRPC 服务器
@@ -132,17 +158,22 @@ func (m *Master) startGRPCServer() error {
 
 	// 启动服务器
 	go func() {
-		m.logger.Info("gRPC server listening", "port", m.config.GRPCPort)
+		m.logger.InfoKV("gRPC server listening", "port", m.config.GRPCPort)
 		if err := m.grpcServer.Serve(lis); err != nil {
-			m.logger.Error("gRPC server error", "error", err)
+			m.logger.ErrorKV("gRPC server error", "error", err)
 		}
 	}()
 
 	return nil
 }
 
-// SubmitTask 提交任务
+// SubmitTask 提交任务（不立即执行,等待手动启动）
 func (m *Master) SubmitTask(task *common.Task) error {
+	return m.SubmitTaskWithOptions(task, false)
+}
+
+// SubmitTaskWithOptions 提交任务并指定是否自动执行
+func (m *Master) SubmitTaskWithOptions(task *common.Task, autoStart bool) error {
 	// 使用 mathx.IfEmpty 确保有 task.ID
 	task.ID = mathx.IfEmpty(task.ID, m.idGenerator.GenerateRequestID())
 
@@ -151,8 +182,15 @@ func (m *Master) SubmitTask(task *common.Task) error {
 		return errorx.WrapError("failed to submit task", err)
 	}
 
-	// 异步处理任务
-	go m.processTask(task)
+	// 根据参数决定是否立即执行
+	if autoStart {
+		go m.processTask(task)
+	} else {
+		m.logger.InfoKV("Task submitted, waiting for manual start",
+			"task_id", task.ID,
+			"required_slaves", m.getRequiredSlaveCount(task),
+			"available_slaves", m.slavePool.Count())
+	}
 
 	return nil
 }
@@ -162,12 +200,147 @@ func (m *Master) GenerateTaskID() string {
 	return m.idGenerator.GenerateRequestID()
 }
 
-// processTask 处理任务
+// TaskStartOptions 任务启动选项
+type TaskStartOptions struct {
+	SlaveIDs    []string // 指定 Slave ID 列表（可选）
+	SlaveRegion string   // 指定区域（可选）
+}
+
+// StartTaskWithOptions 启动指定任务（支持 Slave 过滤）
+func (m *Master) StartTaskWithOptions(taskID string, options *TaskStartOptions) error {
+	task, exists := m.taskQueue.Get(taskID)
+	if !exists {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	if task.State != common.TaskStatePending {
+		return fmt.Errorf("task %s is not in pending state (current: %s)", taskID, task.State)
+	}
+
+	// 根据选项过滤 Slave
+	var slaves []*common.SlaveInfo
+	if options != nil {
+		slaves = m.filterSlaves(options)
+		if len(slaves) == 0 {
+			return fmt.Errorf("no slaves match the filter criteria")
+		}
+	} else {
+		// 使用默认策略选择 Slave
+		required := m.getRequiredSlaveCount(task)
+		slaves = m.slavePool.Select(required)
+		if len(slaves) == 0 {
+			return fmt.Errorf("no available slaves")
+		}
+	}
+
+	m.logger.InfoKV("Task starting",
+		"task_id", taskID,
+		"slave_count", len(slaves),
+		"slave_ids", m.getSlaveIDs(slaves))
+
+	// 异步执行任务（传入过滤后的 Slave 列表）
+	go m.processTaskWithSlaves(task, slaves)
+
+	return nil
+}
+
+// filterSlaves 根据选项过滤 Slave
+func (m *Master) filterSlaves(options *TaskStartOptions) []*common.SlaveInfo {
+	allSlaves := m.slavePool.GetAllSlaves()
+	var filtered []*common.SlaveInfo
+
+	m.logger.DebugKV("Filtering slaves",
+		"total_slaves", len(allSlaves),
+		"requested_ids", options.SlaveIDs,
+		"requested_region", options.SlaveRegion)
+
+	// 如果指定了 Slave ID 列表
+	if len(options.SlaveIDs) > 0 {
+		slaveIDSet := make(map[string]bool)
+		for _, id := range options.SlaveIDs {
+			slaveIDSet[id] = true
+		}
+
+		for _, slave := range allSlaves {
+			m.logger.DebugKV("Checking slave",
+				"slave_id", slave.ID,
+				"state", slave.State,
+				"requested", slaveIDSet[slave.ID])
+
+			if slaveIDSet[slave.ID] && slave.State == common.SlaveStateIdle {
+				filtered = append(filtered, slave)
+			}
+		}
+
+		m.logger.DebugKV("Filtered slaves by ID",
+			"requested_count", len(options.SlaveIDs),
+			"matched_count", len(filtered))
+		return filtered
+	}
+
+	// 如果指定了区域
+	if options.SlaveRegion != "" {
+		for _, slave := range allSlaves {
+			if slave.Region == options.SlaveRegion && slave.State == common.SlaveStateIdle {
+				filtered = append(filtered, slave)
+			}
+		}
+		return filtered
+	}
+
+	// 没有过滤条件，返回所有空闲 Slave
+	for _, slave := range allSlaves {
+		if slave.State == common.SlaveStateIdle {
+			filtered = append(filtered, slave)
+		}
+	}
+	return filtered
+}
+
+// getSlaveIDs 提取 Slave ID 列表
+func (m *Master) getSlaveIDs(slaves []*common.SlaveInfo) []string {
+	ids := make([]string, len(slaves))
+	for i, slave := range slaves {
+		ids[i] = slave.ID
+	}
+	return ids
+}
+
+// StartAllPendingTasks 启动所有待执行的任务
+func (m *Master) StartAllPendingTasks() (started []string, failed map[string]string) {
+	pendingTasks := m.taskQueue.GetPending()
+	started = make([]string, 0)
+	failed = make(map[string]string)
+
+	for _, task := range pendingTasks {
+		if err := m.StartTaskWithOptions(task.ID, nil); err != nil {
+			failed[task.ID] = err.Error()
+			m.logger.WarnKV("Failed to start task", "task_id", task.ID, "error", err)
+		} else {
+			started = append(started, task.ID)
+		}
+	}
+
+	return started, failed
+}
+
+// processTask 处理任务（使用默认 Slave 选择策略）
 func (m *Master) processTask(task *common.Task) {
-	// 选择 Slave
-	slaves := m.slavePool.Select(m.getRequiredSlaveCount(task))
+	requiredCount := m.getRequiredSlaveCount(task)
+	slaves := m.slavePool.Select(requiredCount)
+	m.processTaskWithSlaves(task, slaves)
+}
+
+// processTaskWithSlaves 处理任务（使用指定的 Slave 列表）
+func (m *Master) processTaskWithSlaves(task *common.Task, slaves []*common.SlaveInfo) {
+	m.logger.InfoKV("Processing task",
+		"task_id", task.ID,
+		"slave_count", len(slaves),
+		"total_workers", task.TotalWorkers)
+
+	// 检查 Slave 列表
 	if len(slaves) == 0 {
-		m.logger.Error("No available slaves", "task_id", task.ID)
+		m.logger.ErrorKV("No available slaves", "task_id", task.ID)
 		m.taskQueue.MoveToFailed(task.ID, "no available slaves")
 		return
 	}
@@ -176,7 +349,7 @@ func (m *Master) processTask(task *common.Task) {
 	subTasks, err := m.taskQueue.Split(task, slaves)
 	if err != nil {
 		errMsg := errorx.WrapError("failed to split task", err).Error()
-		m.logger.Error(errMsg, "task_id", task.ID)
+		m.logger.ErrorKV(errMsg, "task_id", task.ID)
 		m.taskQueue.MoveToFailed(task.ID, errMsg)
 		return
 	}
@@ -186,6 +359,11 @@ func (m *Master) processTask(task *common.Task) {
 	for i, slave := range slaves {
 		task.AssignedSlaves[i] = slave.ID
 	}
+
+	m.logger.InfoKV("Task assigned slaves updated",
+		"task_id", task.ID,
+		"assigned_slaves", task.AssignedSlaves)
+
 	m.taskQueue.MoveToRunning(task.ID)
 
 	// 使用 syncx.Parallel 并发分发子任务到各个 Slave
@@ -210,7 +388,7 @@ func (m *Master) processTask(task *common.Task) {
 
 	success := int(successCount.Load())
 	if success == 0 {
-		m.logger.Error("All subtasks failed", "task_id", task.ID)
+		m.logger.ErrorKV("All subtasks failed", "task_id", task.ID)
 		m.taskQueue.MoveToFailed(task.ID, "all subtasks failed")
 	} else if success < len(subTasks) {
 		m.logger.Warn("Some subtasks failed",
@@ -219,7 +397,7 @@ func (m *Master) processTask(task *common.Task) {
 			"total", len(subTasks))
 	}
 
-	m.logger.Info("Task distributed",
+	m.logger.InfoKV("Task distributed",
 		"task_id", task.ID,
 		"slave_count", len(slaves),
 		"subtask_count", len(subTasks),
@@ -228,10 +406,8 @@ func (m *Master) processTask(task *common.Task) {
 
 // getRequiredSlaveCount 计算所需的 Slave 数量
 func (m *Master) getRequiredSlaveCount(task *common.Task) int {
-	// 简单策略：每100个worker需要1个slave
-	count := mathx.IfNotZero(task.TotalWorkers/100, 1)
-
-	// 最多使用所有可用的 Slave
+	// 配置值已在 NewMaster 中使用 mathx 工具函数做了兜底处理,直接使用
+	count := mathx.Max(task.TotalWorkers/m.config.WorkersPerSlave, m.config.MinSlaveCount) // 最多使用所有可用的 Slave
 	available := m.slavePool.Count()
 	if count > available {
 		count = available
@@ -266,13 +442,14 @@ func (m *Master) GetStats() map[string]interface{} {
 		"task_running":  queueStats["running"],
 		"task_complete": queueStats["complete"],
 		"task_failed":   queueStats["failed"],
+		"task_stopped":  queueStats["stopped"],
 	}
 }
 
 // dispatchSubTask 分发子任务到指定 Slave
 func (m *Master) dispatchSubTask(subTask *common.SubTask) error {
 	// 获取 Slave 客户端
-	client, err := m.getSlaveClient(subTask.SlaveID)
+	client, err := m.GetSlaveClient(subTask.SlaveID)
 	if err != nil {
 		return fmt.Errorf("failed to get slave client: %w", err)
 	}
@@ -298,7 +475,7 @@ func (m *Master) dispatchSubTask(subTask *common.SubTask) error {
 		return fmt.Errorf("task rejected by slave: %s", resp.Message)
 	}
 
-	m.logger.Info("Subtask dispatched",
+	m.logger.InfoKV("Subtask dispatched",
 		"task_id", subTask.TaskID,
 		"subtask_id", subTask.SubTaskID,
 		"slave_id", subTask.SlaveID,
@@ -307,8 +484,8 @@ func (m *Master) dispatchSubTask(subTask *common.SubTask) error {
 	return nil
 }
 
-// getSlaveClient 获取或创建 Slave 客户端 - 使用 syncx.Map
-func (m *Master) getSlaveClient(slaveID string) (pb.SlaveServiceClient, error) {
+// GetSlaveClient 获取或创建 Slave 客户端 - 使用 syncx.Map
+func (m *Master) GetSlaveClient(slaveID string) (pb.SlaveServiceClient, error) {
 	// 从 Map 中加载
 	client, exists := m.slaveClients.Load(slaveID)
 	if exists {
@@ -349,10 +526,10 @@ func (m *Master) StopTask(taskID string) error {
 	// 使用 syncx.Parallel 并发向所有分配的 Slave 发送停止指令
 	syncx.NewParallelSliceExecutor[string, bool](task.AssignedSlaves).
 		OnError(func(idx int, slaveID string, err error) {
-			m.logger.Error("Failed to stop task on slave", "slave_id", slaveID, "error", err)
+			m.logger.ErrorKV("Failed to stop task on slave", "slave_id", slaveID, "error", err)
 		}).
 		Execute(func(idx int, slaveID string) (bool, error) {
-			client, err := m.getSlaveClient(slaveID)
+			client, err := m.GetSlaveClient(slaveID)
 			if err != nil {
 				return false, err
 			}

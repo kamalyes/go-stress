@@ -89,7 +89,7 @@ const (
 	TaskState_TASK_STATE_UNSPECIFIED TaskState = 0 // 未指定状态 | EN Unspecified state
 	TaskState_TASK_STATE_PENDING     TaskState = 1 // 待执行：任务已下发，等待代理开始执行 | EN Pending: Task has been issued, waiting for agent to start execution
 	TaskState_TASK_STATE_RUNNING     TaskState = 2 // 运行中：任务正在执行 | EN Running: Task is being executed
-	TaskState_TASK_STATE_COMPLETE    TaskState = 3 // 已完成：任务正常执行完毕 | EN Completed: Task finished execution normally
+	TaskState_TASK_STATE_COMPLETED   TaskState = 3 // 已完成：任务正常执行完毕 | EN Completed: Task finished execution normally
 	TaskState_TASK_STATE_FAILED      TaskState = 4 // 执行失败：任务执行过程中出错 | EN Failed: Task encountered an error during execution
 	TaskState_TASK_STATE_STOPPED     TaskState = 5 // 已停止：任务被手动停止 | EN Stopped: Task was manually stopped
 )
@@ -100,7 +100,7 @@ var (
 		0: "TASK_STATE_UNSPECIFIED",
 		1: "TASK_STATE_PENDING",
 		2: "TASK_STATE_RUNNING",
-		3: "TASK_STATE_COMPLETE",
+		3: "TASK_STATE_COMPLETED",
 		4: "TASK_STATE_FAILED",
 		5: "TASK_STATE_STOPPED",
 	}
@@ -108,7 +108,7 @@ var (
 		"TASK_STATE_UNSPECIFIED": 0,
 		"TASK_STATE_PENDING":     1,
 		"TASK_STATE_RUNNING":     2,
-		"TASK_STATE_COMPLETE":    3,
+		"TASK_STATE_COMPLETED":   3,
 		"TASK_STATE_FAILED":      4,
 		"TASK_STATE_STOPPED":     5,
 	}
@@ -938,23 +938,23 @@ func (x *SlaveStatus) GetTimestamp() int64 {
 // 统计数据 | EN Statistics Data
 // 从节点上报的压测任务实时统计数据 | EN Real-time statistics data of stress test task reported by slave node
 type StatsData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SlaveId       string                 `protobuf:"bytes,1,opt,name=slave_id,json=slaveId,proto3" json:"slave_id,omitempty"`                                                                                         // 从节点 ID | EN Slave node ID
-	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`                                                                                            // 任务 ID | EN Task ID
-	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                                                                   // 统计数据采集时间戳（毫秒） | EN Statistics collection timestamp (milliseconds)
-	TotalRequests int64                  `protobuf:"varint,4,opt,name=total_requests,json=totalRequests,proto3" json:"total_requests,omitempty"`                                                                      // 累计请求总数 | EN Total cumulative requests
-	SuccessCount  int64                  `protobuf:"varint,5,opt,name=success_count,json=successCount,proto3" json:"success_count,omitempty"`                                                                         // 成功请求数 | EN Number of successful requests
-	FailedCount   int64                  `protobuf:"varint,6,opt,name=failed_count,json=failedCount,proto3" json:"failed_count,omitempty"`                                                                            // 失败请求数 | EN Number of failed requests
-	AvgLatency    float64                `protobuf:"fixed64,7,opt,name=avg_latency,json=avgLatency,proto3" json:"avg_latency,omitempty"`                                                                              // 平均响应延迟（毫秒） | EN Average response latency (milliseconds)
-	P95Latency    float64                `protobuf:"fixed64,8,opt,name=p95_latency,json=p95Latency,proto3" json:"p95_latency,omitempty"`                                                                              // P95 响应延迟（毫秒）：95%的请求延迟小于该值 | EN P95 response latency (milliseconds): 95% of requests have latency less than this value
-	P99Latency    float64                `protobuf:"fixed64,9,opt,name=p99_latency,json=p99Latency,proto3" json:"p99_latency,omitempty"`                                                                              // P99 响应延迟（毫秒）：99%的请求延迟小于该值 | EN P99 response latency (milliseconds): 99% of requests have latency less than this value
-	MinLatency    float64                `protobuf:"fixed64,10,opt,name=min_latency,json=minLatency,proto3" json:"min_latency,omitempty"`                                                                             // 最小响应延迟（毫秒） | EN Minimum response latency (milliseconds)
-	MaxLatency    float64                `protobuf:"fixed64,11,opt,name=max_latency,json=maxLatency,proto3" json:"max_latency,omitempty"`                                                                             // 最大响应延迟（毫秒） | EN Maximum response latency (milliseconds)
-	Qps           float64                `protobuf:"fixed64,12,opt,name=qps,proto3" json:"qps,omitempty"`                                                                                                             // 每秒请求数（Queries Per Second） | EN Queries Per Second
-	StatusCodes   map[string]int64       `protobuf:"bytes,13,rep,name=status_codes,json=statusCodes,proto3" json:"status_codes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // HTTP 状态码/GRPC 错误码计数（如 "200": 1000, "500": 50） | EN HTTP status code/GRPC error code count (e.g., "200": 1000, "500": 50)
-	ErrorTypes    map[string]int64       `protobuf:"bytes,14,rep,name=error_types,json=errorTypes,proto3" json:"error_types,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`    // 错误类型计数（如 "timeout": 20, "connection_error": 10） | EN Error type count (e.g., "timeout": 20, "connection_error": 10)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SlaveId         string                 `protobuf:"bytes,1,opt,name=slave_id,json=slaveId,proto3" json:"slave_id,omitempty"`                                                                                         // 从节点 ID | EN Slave node ID
+	TaskId          string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`                                                                                            // 任务 ID | EN Task ID
+	Timestamp       int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                                                                   // 统计数据采集时间戳(毫秒) | EN Statistics collection timestamp (milliseconds)
+	TotalRequests   int64                  `protobuf:"varint,4,opt,name=total_requests,json=totalRequests,proto3" json:"total_requests,omitempty"`                                                                      // 累计请求总数 | EN Total cumulative requests
+	SuccessRequests int64                  `protobuf:"varint,5,opt,name=success_requests,json=successRequests,proto3" json:"success_requests,omitempty"`                                                                // 成功请求数 | EN Number of successful requests
+	FailedRequests  int64                  `protobuf:"varint,6,opt,name=failed_requests,json=failedRequests,proto3" json:"failed_requests,omitempty"`                                                                   // 失败请求数 | EN Number of failed requests
+	AvgLatency      float64                `protobuf:"fixed64,7,opt,name=avg_latency,json=avgLatency,proto3" json:"avg_latency,omitempty"`                                                                              // 平均响应延迟(毫秒) | EN Average response latency (milliseconds)
+	P95Latency      float64                `protobuf:"fixed64,8,opt,name=p95_latency,json=p95Latency,proto3" json:"p95_latency,omitempty"`                                                                              // P95 响应延迟（毫秒）：95%的请求延迟小于该值 | EN P95 response latency (milliseconds): 95% of requests have latency less than this value
+	P99Latency      float64                `protobuf:"fixed64,9,opt,name=p99_latency,json=p99Latency,proto3" json:"p99_latency,omitempty"`                                                                              // P99 响应延迟（毫秒）：99%的请求延迟小于该值 | EN P99 response latency (milliseconds): 99% of requests have latency less than this value
+	MinLatency      float64                `protobuf:"fixed64,10,opt,name=min_latency,json=minLatency,proto3" json:"min_latency,omitempty"`                                                                             // 最小响应延迟（毫秒） | EN Minimum response latency (milliseconds)
+	MaxLatency      float64                `protobuf:"fixed64,11,opt,name=max_latency,json=maxLatency,proto3" json:"max_latency,omitempty"`                                                                             // 最大响应延迟（毫秒） | EN Maximum response latency (milliseconds)
+	Qps             float64                `protobuf:"fixed64,12,opt,name=qps,proto3" json:"qps,omitempty"`                                                                                                             // 每秒请求数（Queries Per Second） | EN Queries Per Second
+	StatusCodes     map[string]int64       `protobuf:"bytes,13,rep,name=status_codes,json=statusCodes,proto3" json:"status_codes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // HTTP 状态码/GRPC 错误码计数（如 "200": 1000, "500": 50） | EN HTTP status code/GRPC error code count (e.g., "200": 1000, "500": 50)
+	ErrorTypes      map[string]int64       `protobuf:"bytes,14,rep,name=error_types,json=errorTypes,proto3" json:"error_types,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`    // 错误类型计数（如 "timeout": 20, "connection_error": 10） | EN Error type count (e.g., "timeout": 20, "connection_error": 10)
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *StatsData) Reset() {
@@ -1015,16 +1015,16 @@ func (x *StatsData) GetTotalRequests() int64 {
 	return 0
 }
 
-func (x *StatsData) GetSuccessCount() int64 {
+func (x *StatsData) GetSuccessRequests() int64 {
 	if x != nil {
-		return x.SuccessCount
+		return x.SuccessRequests
 	}
 	return 0
 }
 
-func (x *StatsData) GetFailedCount() int64 {
+func (x *StatsData) GetFailedRequests() int64 {
 	if x != nil {
-		return x.FailedCount
+		return x.FailedRequests
 	}
 	return 0
 }
@@ -1139,6 +1139,138 @@ func (x *ReportResponse) GetMessage() string {
 	return ""
 }
 
+// 任务完成请求 | EN Task Completion Request
+// 从节点向主节点报告任务执行完成的请求参数 | EN Request parameters for slave node to report task execution completion to master node
+type TaskCompletionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SlaveId       string                 `protobuf:"bytes,1,opt,name=slave_id,json=slaveId,proto3" json:"slave_id,omitempty"`                // 从节点 ID | EN Slave node ID
+	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`                   // 任务 ID | EN Task ID
+	Success       bool                   `protobuf:"varint,3,opt,name=success,proto3" json:"success,omitempty"`                              // 任务是否成功完成 | EN Whether task completed successfully
+	ErrorMessage  string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"` // 失败原因（仅在success=false时有效） | EN Failure reason (only valid when success=false)
+	CompletedAt   int64                  `protobuf:"varint,5,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`   // 任务完成时间戳（毫秒） | EN Task completion timestamp (milliseconds)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskCompletionRequest) Reset() {
+	*x = TaskCompletionRequest{}
+	mi := &file_stress_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskCompletionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskCompletionRequest) ProtoMessage() {}
+
+func (x *TaskCompletionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stress_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskCompletionRequest.ProtoReflect.Descriptor instead.
+func (*TaskCompletionRequest) Descriptor() ([]byte, []int) {
+	return file_stress_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TaskCompletionRequest) GetSlaveId() string {
+	if x != nil {
+		return x.SlaveId
+	}
+	return ""
+}
+
+func (x *TaskCompletionRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *TaskCompletionRequest) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *TaskCompletionRequest) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *TaskCompletionRequest) GetCompletedAt() int64 {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return 0
+}
+
+// 任务完成响应 | EN Task Completion Response
+// 主节点对任务完成通知的响应 | EN Master node's response to task completion notification
+type TaskCompletionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Acknowledged  bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"` // 是否确认接收 | EN Whether receipt is acknowledged
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`            // 响应描述信息 | EN Response description information
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskCompletionResponse) Reset() {
+	*x = TaskCompletionResponse{}
+	mi := &file_stress_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskCompletionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskCompletionResponse) ProtoMessage() {}
+
+func (x *TaskCompletionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stress_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskCompletionResponse.ProtoReflect.Descriptor instead.
+func (*TaskCompletionResponse) Descriptor() ([]byte, []int) {
+	return file_stress_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TaskCompletionResponse) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
+func (x *TaskCompletionResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 // 下线请求 | EN Unregister Request
 // 从节点向主节点发起的下线请求参数 | EN Parameters for slave node to initiate unregistration request to master node
 type UnregisterRequest struct {
@@ -1151,7 +1283,7 @@ type UnregisterRequest struct {
 
 func (x *UnregisterRequest) Reset() {
 	*x = UnregisterRequest{}
-	mi := &file_stress_proto_msgTypes[12]
+	mi := &file_stress_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1163,7 +1295,7 @@ func (x *UnregisterRequest) String() string {
 func (*UnregisterRequest) ProtoMessage() {}
 
 func (x *UnregisterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stress_proto_msgTypes[12]
+	mi := &file_stress_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1176,7 +1308,7 @@ func (x *UnregisterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterRequest.ProtoReflect.Descriptor instead.
 func (*UnregisterRequest) Descriptor() ([]byte, []int) {
-	return file_stress_proto_rawDescGZIP(), []int{12}
+	return file_stress_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UnregisterRequest) GetSlaveId() string {
@@ -1205,7 +1337,7 @@ type UnregisterResponse struct {
 
 func (x *UnregisterResponse) Reset() {
 	*x = UnregisterResponse{}
-	mi := &file_stress_proto_msgTypes[13]
+	mi := &file_stress_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +1349,7 @@ func (x *UnregisterResponse) String() string {
 func (*UnregisterResponse) ProtoMessage() {}
 
 func (x *UnregisterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stress_proto_msgTypes[13]
+	mi := &file_stress_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +1362,7 @@ func (x *UnregisterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterResponse.ProtoReflect.Descriptor instead.
 func (*UnregisterResponse) Descriptor() ([]byte, []int) {
-	return file_stress_proto_rawDescGZIP(), []int{13}
+	return file_stress_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UnregisterResponse) GetSuccess() bool {
@@ -1259,7 +1391,7 @@ type ConfigUpdate struct {
 
 func (x *ConfigUpdate) Reset() {
 	*x = ConfigUpdate{}
-	mi := &file_stress_proto_msgTypes[14]
+	mi := &file_stress_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1271,7 +1403,7 @@ func (x *ConfigUpdate) String() string {
 func (*ConfigUpdate) ProtoMessage() {}
 
 func (x *ConfigUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_stress_proto_msgTypes[14]
+	mi := &file_stress_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1284,7 +1416,7 @@ func (x *ConfigUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigUpdate.ProtoReflect.Descriptor instead.
 func (*ConfigUpdate) Descriptor() ([]byte, []int) {
-	return file_stress_proto_rawDescGZIP(), []int{14}
+	return file_stress_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ConfigUpdate) GetSlaveId() string {
@@ -1313,7 +1445,7 @@ type UpdateResponse struct {
 
 func (x *UpdateResponse) Reset() {
 	*x = UpdateResponse{}
-	mi := &file_stress_proto_msgTypes[15]
+	mi := &file_stress_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1325,7 +1457,7 @@ func (x *UpdateResponse) String() string {
 func (*UpdateResponse) ProtoMessage() {}
 
 func (x *UpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stress_proto_msgTypes[15]
+	mi := &file_stress_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1338,7 +1470,7 @@ func (x *UpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateResponse.ProtoReflect.Descriptor instead.
 func (*UpdateResponse) Descriptor() ([]byte, []int) {
-	return file_stress_proto_rawDescGZIP(), []int{15}
+	return file_stress_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UpdateResponse) GetSuccess() bool {
@@ -1353,6 +1485,392 @@ func (x *UpdateResponse) GetMessage() string {
 		return x.Message
 	}
 	return ""
+}
+
+// 详情查询请求 | EN Details Query Request
+// 主节点查询从节点请求详情的请求参数 | EN Request parameters for master node to query slave node request details
+type DetailsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SlaveId       string                 `protobuf:"bytes,1,opt,name=slave_id,json=slaveId,proto3" json:"slave_id,omitempty"` // 从节点 ID | EN Slave node ID
+	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`    // 任务 ID | EN Task ID
+	Offset        int32                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`                 // 分页偏移量（从0开始） | EN Pagination offset (starting from 0)
+	Limit         int32                  `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`                   // 每页数量（最大1000） | EN Number of items per page (max 1000)
+	Status        string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`                  // 状态过滤：all | success | failed | skipped | EN Status filter: all | success | failed | skipped
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DetailsRequest) Reset() {
+	*x = DetailsRequest{}
+	mi := &file_stress_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DetailsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DetailsRequest) ProtoMessage() {}
+
+func (x *DetailsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stress_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DetailsRequest.ProtoReflect.Descriptor instead.
+func (*DetailsRequest) Descriptor() ([]byte, []int) {
+	return file_stress_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *DetailsRequest) GetSlaveId() string {
+	if x != nil {
+		return x.SlaveId
+	}
+	return ""
+}
+
+func (x *DetailsRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *DetailsRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *DetailsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *DetailsRequest) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+// 请求详情 | EN Request Detail
+// 单个请求的详细信息 | EN Detailed information of a single request
+type RequestDetail struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                                                                                             // 详情记录 ID | EN Detail record ID
+	SlaveId         string                 `protobuf:"bytes,2,opt,name=slave_id,json=slaveId,proto3" json:"slave_id,omitempty"`                                                                                                    // 从节点 ID | EN Slave node ID
+	TaskId          string                 `protobuf:"bytes,3,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`                                                                                                       // 任务 ID | EN Task ID
+	Timestamp       int64                  `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                                                                                                              // 请求时间戳（Unix毫秒） | EN Request timestamp (Unix milliseconds)
+	Duration        int64                  `protobuf:"varint,5,opt,name=duration,proto3" json:"duration,omitempty"`                                                                                                                // 响应时长（纳秒） | EN Response duration (nanoseconds)
+	StatusCode      int32                  `protobuf:"varint,6,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`                                                                                          // 响应状态码 | EN Response status code
+	Success         bool                   `protobuf:"varint,7,opt,name=success,proto3" json:"success,omitempty"`                                                                                                                  // 是否成功 | EN Whether successful
+	Skipped         bool                   `protobuf:"varint,8,opt,name=skipped,proto3" json:"skipped,omitempty"`                                                                                                                  // 是否跳过 | EN Whether skipped
+	SkipReason      string                 `protobuf:"bytes,9,opt,name=skip_reason,json=skipReason,proto3" json:"skip_reason,omitempty"`                                                                                           // 跳过原因 | EN Skip reason
+	GroupId         uint64                 `protobuf:"varint,10,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`                                                                                                  // 分组 ID | EN Group ID
+	ApiName         string                 `protobuf:"bytes,11,opt,name=api_name,json=apiName,proto3" json:"api_name,omitempty"`                                                                                                   // API 名称 | EN API name
+	Error           string                 `protobuf:"bytes,12,opt,name=error,proto3" json:"error,omitempty"`                                                                                                                      // 错误信息 | EN Error message
+	Size            float64                `protobuf:"fixed64,13,opt,name=size,proto3" json:"size,omitempty"`                                                                                                                      // 响应大小 | EN Response size
+	Url             string                 `protobuf:"bytes,14,opt,name=url,proto3" json:"url,omitempty"`                                                                                                                          // 请求 URL | EN Request URL
+	Method          string                 `protobuf:"bytes,15,opt,name=method,proto3" json:"method,omitempty"`                                                                                                                    // 请求方法 | EN Request method
+	Query           string                 `protobuf:"bytes,16,opt,name=query,proto3" json:"query,omitempty"`                                                                                                                      // Query 参数 | EN Query parameters
+	Headers         map[string]string      `protobuf:"bytes,17,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`                                        // 请求头 | EN Request headers
+	Body            string                 `protobuf:"bytes,18,opt,name=body,proto3" json:"body,omitempty"`                                                                                                                        // 请求体 | EN Request body
+	ResponseBody    string                 `protobuf:"bytes,19,opt,name=response_body,json=responseBody,proto3" json:"response_body,omitempty"`                                                                                    // 响应体 | EN Response body
+	ResponseHeaders map[string]string      `protobuf:"bytes,20,rep,name=response_headers,json=responseHeaders,proto3" json:"response_headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // 响应头 | EN Response headers
+	ExtractedVars   map[string]string      `protobuf:"bytes,21,rep,name=extracted_vars,json=extractedVars,proto3" json:"extracted_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`       // 提取的变量 | EN Extracted variables
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RequestDetail) Reset() {
+	*x = RequestDetail{}
+	mi := &file_stress_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RequestDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RequestDetail) ProtoMessage() {}
+
+func (x *RequestDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_stress_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RequestDetail.ProtoReflect.Descriptor instead.
+func (*RequestDetail) Descriptor() ([]byte, []int) {
+	return file_stress_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RequestDetail) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetSlaveId() string {
+	if x != nil {
+		return x.SlaveId
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *RequestDetail) GetDuration() int64 {
+	if x != nil {
+		return x.Duration
+	}
+	return 0
+}
+
+func (x *RequestDetail) GetStatusCode() int32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+func (x *RequestDetail) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RequestDetail) GetSkipped() bool {
+	if x != nil {
+		return x.Skipped
+	}
+	return false
+}
+
+func (x *RequestDetail) GetSkipReason() string {
+	if x != nil {
+		return x.SkipReason
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetGroupId() uint64 {
+	if x != nil {
+		return x.GroupId
+	}
+	return 0
+}
+
+func (x *RequestDetail) GetApiName() string {
+	if x != nil {
+		return x.ApiName
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetSize() float64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *RequestDetail) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetHeaders() map[string]string {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *RequestDetail) GetBody() string {
+	if x != nil {
+		return x.Body
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetResponseBody() string {
+	if x != nil {
+		return x.ResponseBody
+	}
+	return ""
+}
+
+func (x *RequestDetail) GetResponseHeaders() map[string]string {
+	if x != nil {
+		return x.ResponseHeaders
+	}
+	return nil
+}
+
+func (x *RequestDetail) GetExtractedVars() map[string]string {
+	if x != nil {
+		return x.ExtractedVars
+	}
+	return nil
+}
+
+// 详情查询响应 | EN Details Query Response
+// 从节点返回的请求详情列表 | EN List of request details returned by slave node
+type DetailsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Total         int32                  `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`                                      // 总记录数（满足过滤条件的） | EN Total number of records (matching filter conditions)
+	Offset        int32                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`                                    // 当前偏移量 | EN Current offset
+	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`                                      // 每页数量 | EN Number of items per page
+	Details       []*RequestDetail       `protobuf:"bytes,4,rep,name=details,proto3" json:"details,omitempty"`                                   // 详情记录列表 | EN List of detail records
+	TotalRequests int64                  `protobuf:"varint,5,opt,name=total_requests,json=totalRequests,proto3" json:"total_requests,omitempty"` // 真实总请求数 | EN Real total number of requests
+	SuccessCount  int64                  `protobuf:"varint,6,opt,name=success_count,json=successCount,proto3" json:"success_count,omitempty"`    // 真实成功数 | EN Real number of successful requests
+	FailedCount   int64                  `protobuf:"varint,7,opt,name=failed_count,json=failedCount,proto3" json:"failed_count,omitempty"`       // 真实失败数 | EN Real number of failed requests
+	SkippedCount  int64                  `protobuf:"varint,8,opt,name=skipped_count,json=skippedCount,proto3" json:"skipped_count,omitempty"`    // 真实跳过数 | EN Real number of skipped requests
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DetailsResponse) Reset() {
+	*x = DetailsResponse{}
+	mi := &file_stress_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DetailsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DetailsResponse) ProtoMessage() {}
+
+func (x *DetailsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stress_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DetailsResponse.ProtoReflect.Descriptor instead.
+func (*DetailsResponse) Descriptor() ([]byte, []int) {
+	return file_stress_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *DetailsResponse) GetTotal() int32 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *DetailsResponse) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *DetailsResponse) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *DetailsResponse) GetDetails() []*RequestDetail {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+func (x *DetailsResponse) GetTotalRequests() int64 {
+	if x != nil {
+		return x.TotalRequests
+	}
+	return 0
+}
+
+func (x *DetailsResponse) GetSuccessCount() int64 {
+	if x != nil {
+		return x.SuccessCount
+	}
+	return 0
+}
+
+func (x *DetailsResponse) GetFailedCount() int64 {
+	if x != nil {
+		return x.FailedCount
+	}
+	return 0
+}
+
+func (x *DetailsResponse) GetSkippedCount() int64 {
+	if x != nil {
+		return x.SkippedCount
+	}
+	return 0
 }
 
 var File_stress_proto protoreflect.FileDescriptor
@@ -1419,14 +1937,14 @@ const file_stress_proto_rawDesc = "" +
 	"\fmemory_usage\x18\x05 \x01(\x01R\vmemoryUsage\x12'\n" +
 	"\x0frunning_workers\x18\x06 \x01(\x03R\x0erunningWorkers\x12%\n" +
 	"\x0etotal_requests\x18\a \x01(\x03R\rtotalRequests\x12\x1c\n" +
-	"\ttimestamp\x18\b \x01(\x03R\ttimestamp\"\x8d\x05\n" +
+	"\ttimestamp\x18\b \x01(\x03R\ttimestamp\"\x99\x05\n" +
 	"\tStatsData\x12\x19\n" +
 	"\bslave_id\x18\x01 \x01(\tR\aslaveId\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12\x1c\n" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12%\n" +
-	"\x0etotal_requests\x18\x04 \x01(\x03R\rtotalRequests\x12#\n" +
-	"\rsuccess_count\x18\x05 \x01(\x03R\fsuccessCount\x12!\n" +
-	"\ffailed_count\x18\x06 \x01(\x03R\vfailedCount\x12\x1f\n" +
+	"\x0etotal_requests\x18\x04 \x01(\x03R\rtotalRequests\x12)\n" +
+	"\x10success_requests\x18\x05 \x01(\x03R\x0fsuccessRequests\x12'\n" +
+	"\x0ffailed_requests\x18\x06 \x01(\x03R\x0efailedRequests\x12\x1f\n" +
 	"\vavg_latency\x18\a \x01(\x01R\n" +
 	"avgLatency\x12\x1f\n" +
 	"\vp95_latency\x18\b \x01(\x01R\n" +
@@ -1450,6 +1968,15 @@ const file_stress_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01\"F\n" +
 	"\x0eReportResponse\x12\x1a\n" +
 	"\breceived\x18\x01 \x01(\bR\breceived\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xad\x01\n" +
+	"\x15TaskCompletionRequest\x12\x19\n" +
+	"\bslave_id\x18\x01 \x01(\tR\aslaveId\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12\x18\n" +
+	"\asuccess\x18\x03 \x01(\bR\asuccess\x12#\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\x12!\n" +
+	"\fcompleted_at\x18\x05 \x01(\x03R\vcompletedAt\"V\n" +
+	"\x16TaskCompletionResponse\x12\"\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"F\n" +
 	"\x11UnregisterRequest\x12\x19\n" +
 	"\bslave_id\x18\x01 \x01(\tR\aslaveId\x12\x16\n" +
@@ -1465,7 +1992,56 @@ const file_stress_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"D\n" +
 	"\x0eUpdateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*\xa2\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x8a\x01\n" +
+	"\x0eDetailsRequest\x12\x19\n" +
+	"\bslave_id\x18\x01 \x01(\tR\aslaveId\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x05R\x06offset\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06status\x18\x05 \x01(\tR\x06status\"\x84\a\n" +
+	"\rRequestDetail\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\bslave_id\x18\x02 \x01(\tR\aslaveId\x12\x17\n" +
+	"\atask_id\x18\x03 \x01(\tR\x06taskId\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\x12\x1a\n" +
+	"\bduration\x18\x05 \x01(\x03R\bduration\x12\x1f\n" +
+	"\vstatus_code\x18\x06 \x01(\x05R\n" +
+	"statusCode\x12\x18\n" +
+	"\asuccess\x18\a \x01(\bR\asuccess\x12\x18\n" +
+	"\askipped\x18\b \x01(\bR\askipped\x12\x1f\n" +
+	"\vskip_reason\x18\t \x01(\tR\n" +
+	"skipReason\x12\x19\n" +
+	"\bgroup_id\x18\n" +
+	" \x01(\x04R\agroupId\x12\x19\n" +
+	"\bapi_name\x18\v \x01(\tR\aapiName\x12\x14\n" +
+	"\x05error\x18\f \x01(\tR\x05error\x12\x12\n" +
+	"\x04size\x18\r \x01(\x01R\x04size\x12\x10\n" +
+	"\x03url\x18\x0e \x01(\tR\x03url\x12\x16\n" +
+	"\x06method\x18\x0f \x01(\tR\x06method\x12\x14\n" +
+	"\x05query\x18\x10 \x01(\tR\x05query\x12<\n" +
+	"\aheaders\x18\x11 \x03(\v2\".stress.RequestDetail.HeadersEntryR\aheaders\x12\x12\n" +
+	"\x04body\x18\x12 \x01(\tR\x04body\x12#\n" +
+	"\rresponse_body\x18\x13 \x01(\tR\fresponseBody\x12U\n" +
+	"\x10response_headers\x18\x14 \x03(\v2*.stress.RequestDetail.ResponseHeadersEntryR\x0fresponseHeaders\x12O\n" +
+	"\x0eextracted_vars\x18\x15 \x03(\v2(.stress.RequestDetail.ExtractedVarsEntryR\rextractedVars\x1a:\n" +
+	"\fHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aB\n" +
+	"\x14ResponseHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a@\n" +
+	"\x12ExtractedVarsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9a\x02\n" +
+	"\x0fDetailsResponse\x12\x14\n" +
+	"\x05total\x18\x01 \x01(\x05R\x05total\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x05R\x06offset\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\x12/\n" +
+	"\adetails\x18\x04 \x03(\v2\x15.stress.RequestDetailR\adetails\x12%\n" +
+	"\x0etotal_requests\x18\x05 \x01(\x03R\rtotalRequests\x12#\n" +
+	"\rsuccess_count\x18\x06 \x01(\x03R\fsuccessCount\x12!\n" +
+	"\ffailed_count\x18\a \x01(\x03R\vfailedCount\x12#\n" +
+	"\rskipped_count\x18\b \x01(\x03R\fskippedCount*\xa2\x01\n" +
 	"\n" +
 	"AgentState\x12\x1b\n" +
 	"\x17AGENT_STATE_UNSPECIFIED\x10\x00\x12\x14\n" +
@@ -1473,29 +2049,31 @@ const file_stress_proto_rawDesc = "" +
 	"\x13AGENT_STATE_RUNNING\x10\x02\x12\x18\n" +
 	"\x14AGENT_STATE_STOPPING\x10\x03\x12\x15\n" +
 	"\x11AGENT_STATE_ERROR\x10\x04\x12\x17\n" +
-	"\x13AGENT_STATE_OFFLINE\x10\x05*\x9f\x01\n" +
+	"\x13AGENT_STATE_OFFLINE\x10\x05*\xa0\x01\n" +
 	"\tTaskState\x12\x1a\n" +
 	"\x16TASK_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12TASK_STATE_PENDING\x10\x01\x12\x16\n" +
-	"\x12TASK_STATE_RUNNING\x10\x02\x12\x17\n" +
-	"\x13TASK_STATE_COMPLETE\x10\x03\x12\x15\n" +
+	"\x12TASK_STATE_RUNNING\x10\x02\x12\x18\n" +
+	"\x14TASK_STATE_COMPLETED\x10\x03\x12\x15\n" +
 	"\x11TASK_STATE_FAILED\x10\x04\x12\x16\n" +
 	"\x12TASK_STATE_STOPPED\x10\x05*b\n" +
 	"\bProtocol\x12\x18\n" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rPROTOCOL_HTTP\x10\x01\x12\x11\n" +
 	"\rPROTOCOL_GRPC\x10\x02\x12\x16\n" +
-	"\x12PROTOCOL_WEBSOCKET\x10\x032\x95\x02\n" +
+	"\x12PROTOCOL_WEBSOCKET\x10\x032\xec\x02\n" +
 	"\rMasterService\x12<\n" +
 	"\rRegisterSlave\x12\x11.stress.SlaveInfo\x1a\x18.stress.RegisterResponse\x12@\n" +
 	"\tHeartbeat\x12\x18.stress.HeartbeatRequest\x1a\x19.stress.HeartbeatResponse\x12:\n" +
-	"\vReportStats\x12\x11.stress.StatsData\x1a\x16.stress.ReportResponse(\x01\x12H\n" +
-	"\x0fUnregisterSlave\x12\x19.stress.UnregisterRequest\x1a\x1a.stress.UnregisterResponse2\xf5\x01\n" +
+	"\vReportStats\x12\x11.stress.StatsData\x1a\x16.stress.ReportResponse(\x01\x12U\n" +
+	"\x14ReportTaskCompletion\x12\x1d.stress.TaskCompletionRequest\x1a\x1e.stress.TaskCompletionResponse\x12H\n" +
+	"\x0fUnregisterSlave\x12\x19.stress.UnregisterRequest\x1a\x1a.stress.UnregisterResponse2\xbb\x02\n" +
 	"\fSlaveService\x127\n" +
 	"\vExecuteTask\x12\x12.stress.TaskConfig\x1a\x14.stress.TaskResponse\x125\n" +
 	"\bStopTask\x12\x13.stress.StopRequest\x1a\x14.stress.StopResponse\x127\n" +
 	"\tGetStatus\x12\x15.stress.StatusRequest\x1a\x13.stress.SlaveStatus\x12<\n" +
-	"\fUpdateConfig\x12\x14.stress.ConfigUpdate\x1a\x16.stress.UpdateResponseB7Z5github.com/kamalyes/go-stress/distributed/proto;protob\x06proto3"
+	"\fUpdateConfig\x12\x14.stress.ConfigUpdate\x1a\x16.stress.UpdateResponse\x12D\n" +
+	"\x11GetRequestDetails\x12\x16.stress.DetailsRequest\x1a\x17.stress.DetailsResponseB7Z5github.com/kamalyes/go-stress/distributed/proto;protob\x06proto3"
 
 var (
 	file_stress_proto_rawDescOnce sync.Once
@@ -1510,62 +2088,78 @@ func file_stress_proto_rawDescGZIP() []byte {
 }
 
 var file_stress_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_stress_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_stress_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_stress_proto_goTypes = []any{
-	(AgentState)(0),            // 0: stress.AgentState
-	(TaskState)(0),             // 1: stress.TaskState
-	(Protocol)(0),              // 2: stress.Protocol
-	(*SlaveInfo)(nil),          // 3: stress.SlaveInfo
-	(*RegisterResponse)(nil),   // 4: stress.RegisterResponse
-	(*HeartbeatRequest)(nil),   // 5: stress.HeartbeatRequest
-	(*HeartbeatResponse)(nil),  // 6: stress.HeartbeatResponse
-	(*TaskConfig)(nil),         // 7: stress.TaskConfig
-	(*TaskResponse)(nil),       // 8: stress.TaskResponse
-	(*StopRequest)(nil),        // 9: stress.StopRequest
-	(*StopResponse)(nil),       // 10: stress.StopResponse
-	(*StatusRequest)(nil),      // 11: stress.StatusRequest
-	(*SlaveStatus)(nil),        // 12: stress.SlaveStatus
-	(*StatsData)(nil),          // 13: stress.StatsData
-	(*ReportResponse)(nil),     // 14: stress.ReportResponse
-	(*UnregisterRequest)(nil),  // 15: stress.UnregisterRequest
-	(*UnregisterResponse)(nil), // 16: stress.UnregisterResponse
-	(*ConfigUpdate)(nil),       // 17: stress.ConfigUpdate
-	(*UpdateResponse)(nil),     // 18: stress.UpdateResponse
-	nil,                        // 19: stress.SlaveInfo.LabelsEntry
-	nil,                        // 20: stress.StatsData.StatusCodesEntry
-	nil,                        // 21: stress.StatsData.ErrorTypesEntry
-	nil,                        // 22: stress.ConfigUpdate.ConfigEntry
+	(AgentState)(0),                // 0: stress.AgentState
+	(TaskState)(0),                 // 1: stress.TaskState
+	(Protocol)(0),                  // 2: stress.Protocol
+	(*SlaveInfo)(nil),              // 3: stress.SlaveInfo
+	(*RegisterResponse)(nil),       // 4: stress.RegisterResponse
+	(*HeartbeatRequest)(nil),       // 5: stress.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 6: stress.HeartbeatResponse
+	(*TaskConfig)(nil),             // 7: stress.TaskConfig
+	(*TaskResponse)(nil),           // 8: stress.TaskResponse
+	(*StopRequest)(nil),            // 9: stress.StopRequest
+	(*StopResponse)(nil),           // 10: stress.StopResponse
+	(*StatusRequest)(nil),          // 11: stress.StatusRequest
+	(*SlaveStatus)(nil),            // 12: stress.SlaveStatus
+	(*StatsData)(nil),              // 13: stress.StatsData
+	(*ReportResponse)(nil),         // 14: stress.ReportResponse
+	(*TaskCompletionRequest)(nil),  // 15: stress.TaskCompletionRequest
+	(*TaskCompletionResponse)(nil), // 16: stress.TaskCompletionResponse
+	(*UnregisterRequest)(nil),      // 17: stress.UnregisterRequest
+	(*UnregisterResponse)(nil),     // 18: stress.UnregisterResponse
+	(*ConfigUpdate)(nil),           // 19: stress.ConfigUpdate
+	(*UpdateResponse)(nil),         // 20: stress.UpdateResponse
+	(*DetailsRequest)(nil),         // 21: stress.DetailsRequest
+	(*RequestDetail)(nil),          // 22: stress.RequestDetail
+	(*DetailsResponse)(nil),        // 23: stress.DetailsResponse
+	nil,                            // 24: stress.SlaveInfo.LabelsEntry
+	nil,                            // 25: stress.StatsData.StatusCodesEntry
+	nil,                            // 26: stress.StatsData.ErrorTypesEntry
+	nil,                            // 27: stress.ConfigUpdate.ConfigEntry
+	nil,                            // 28: stress.RequestDetail.HeadersEntry
+	nil,                            // 29: stress.RequestDetail.ResponseHeadersEntry
+	nil,                            // 30: stress.RequestDetail.ExtractedVarsEntry
 }
 var file_stress_proto_depIdxs = []int32{
-	19, // 0: stress.SlaveInfo.labels:type_name -> stress.SlaveInfo.LabelsEntry
+	24, // 0: stress.SlaveInfo.labels:type_name -> stress.SlaveInfo.LabelsEntry
 	12, // 1: stress.HeartbeatRequest.status:type_name -> stress.SlaveStatus
 	2,  // 2: stress.TaskConfig.protocol:type_name -> stress.Protocol
 	1,  // 3: stress.TaskConfig.state:type_name -> stress.TaskState
 	0,  // 4: stress.SlaveStatus.state:type_name -> stress.AgentState
-	20, // 5: stress.StatsData.status_codes:type_name -> stress.StatsData.StatusCodesEntry
-	21, // 6: stress.StatsData.error_types:type_name -> stress.StatsData.ErrorTypesEntry
-	22, // 7: stress.ConfigUpdate.config:type_name -> stress.ConfigUpdate.ConfigEntry
-	3,  // 8: stress.MasterService.RegisterSlave:input_type -> stress.SlaveInfo
-	5,  // 9: stress.MasterService.Heartbeat:input_type -> stress.HeartbeatRequest
-	13, // 10: stress.MasterService.ReportStats:input_type -> stress.StatsData
-	15, // 11: stress.MasterService.UnregisterSlave:input_type -> stress.UnregisterRequest
-	7,  // 12: stress.SlaveService.ExecuteTask:input_type -> stress.TaskConfig
-	9,  // 13: stress.SlaveService.StopTask:input_type -> stress.StopRequest
-	11, // 14: stress.SlaveService.GetStatus:input_type -> stress.StatusRequest
-	17, // 15: stress.SlaveService.UpdateConfig:input_type -> stress.ConfigUpdate
-	4,  // 16: stress.MasterService.RegisterSlave:output_type -> stress.RegisterResponse
-	6,  // 17: stress.MasterService.Heartbeat:output_type -> stress.HeartbeatResponse
-	14, // 18: stress.MasterService.ReportStats:output_type -> stress.ReportResponse
-	16, // 19: stress.MasterService.UnregisterSlave:output_type -> stress.UnregisterResponse
-	8,  // 20: stress.SlaveService.ExecuteTask:output_type -> stress.TaskResponse
-	10, // 21: stress.SlaveService.StopTask:output_type -> stress.StopResponse
-	12, // 22: stress.SlaveService.GetStatus:output_type -> stress.SlaveStatus
-	18, // 23: stress.SlaveService.UpdateConfig:output_type -> stress.UpdateResponse
-	16, // [16:24] is the sub-list for method output_type
-	8,  // [8:16] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	25, // 5: stress.StatsData.status_codes:type_name -> stress.StatsData.StatusCodesEntry
+	26, // 6: stress.StatsData.error_types:type_name -> stress.StatsData.ErrorTypesEntry
+	27, // 7: stress.ConfigUpdate.config:type_name -> stress.ConfigUpdate.ConfigEntry
+	28, // 8: stress.RequestDetail.headers:type_name -> stress.RequestDetail.HeadersEntry
+	29, // 9: stress.RequestDetail.response_headers:type_name -> stress.RequestDetail.ResponseHeadersEntry
+	30, // 10: stress.RequestDetail.extracted_vars:type_name -> stress.RequestDetail.ExtractedVarsEntry
+	22, // 11: stress.DetailsResponse.details:type_name -> stress.RequestDetail
+	3,  // 12: stress.MasterService.RegisterSlave:input_type -> stress.SlaveInfo
+	5,  // 13: stress.MasterService.Heartbeat:input_type -> stress.HeartbeatRequest
+	13, // 14: stress.MasterService.ReportStats:input_type -> stress.StatsData
+	15, // 15: stress.MasterService.ReportTaskCompletion:input_type -> stress.TaskCompletionRequest
+	17, // 16: stress.MasterService.UnregisterSlave:input_type -> stress.UnregisterRequest
+	7,  // 17: stress.SlaveService.ExecuteTask:input_type -> stress.TaskConfig
+	9,  // 18: stress.SlaveService.StopTask:input_type -> stress.StopRequest
+	11, // 19: stress.SlaveService.GetStatus:input_type -> stress.StatusRequest
+	19, // 20: stress.SlaveService.UpdateConfig:input_type -> stress.ConfigUpdate
+	21, // 21: stress.SlaveService.GetRequestDetails:input_type -> stress.DetailsRequest
+	4,  // 22: stress.MasterService.RegisterSlave:output_type -> stress.RegisterResponse
+	6,  // 23: stress.MasterService.Heartbeat:output_type -> stress.HeartbeatResponse
+	14, // 24: stress.MasterService.ReportStats:output_type -> stress.ReportResponse
+	16, // 25: stress.MasterService.ReportTaskCompletion:output_type -> stress.TaskCompletionResponse
+	18, // 26: stress.MasterService.UnregisterSlave:output_type -> stress.UnregisterResponse
+	8,  // 27: stress.SlaveService.ExecuteTask:output_type -> stress.TaskResponse
+	10, // 28: stress.SlaveService.StopTask:output_type -> stress.StopResponse
+	12, // 29: stress.SlaveService.GetStatus:output_type -> stress.SlaveStatus
+	20, // 30: stress.SlaveService.UpdateConfig:output_type -> stress.UpdateResponse
+	23, // 31: stress.SlaveService.GetRequestDetails:output_type -> stress.DetailsResponse
+	22, // [22:32] is the sub-list for method output_type
+	12, // [12:22] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_stress_proto_init() }
@@ -1579,7 +2173,7 @@ func file_stress_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stress_proto_rawDesc), len(file_stress_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   20,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

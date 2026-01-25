@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slave 详情 - Go-Stress 分布式管理</title>
+    <link rel="stylesheet" href="distributed.css">
+    <style>
+        .detail-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .detail-section {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .detail-section h3 {
+            margin: 0 0 20px 0;
+            color: #333;
+            font-size: 18px;
+            border-bottom: 2px solid #4285f4;
+            padding-bottom: 10px;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .info-label {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .info-value {
+            color: #333;
+            font-size: 16px;
+            font-weight: 500;
+        }
+        
+        .state-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .state-idle { background: #d4edda; color: #155724; }
+        .state-running { background: #d1ecf1; color: #0c5460; }
+        .state-busy { background: #fff3cd; color: #856404; }
+        .state-offline { background: #e2e3e5; color: #383d41; }
+        .state-error { background: #f8d7da; color: #721c24; }
+        .state-unreachable { background: #f8d7da; color: #721c24; }
+        
+        .health-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .health-healthy { background: #28a745; }
+        .health-warning { background: #ffc107; }
+        .health-critical { background: #dc3545; }
+        
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .task-card {
+            padding: 16px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #4285f4;
+        }
+        
+        .task-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="detail-container">
+        <div class="detail-header">
+            <h1>🤖 Slave 详情</h1>
+            <a href="/distributed" class="btn btn-secondary">← 返回列表</a>
+        </div>
+
+        <!-- 基本信息 -->
+        <div class="detail-section" id="basicInfo">
+            <h3>基本信息</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Slave ID</span>
+                    <span class="info-value" id="slaveId">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">状态</span>
+                    <span class="info-value" id="slaveState">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">地址</span>
+                    <span class="info-value" id="slaveAddress">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">区域</span>
+                    <span class="info-value" id="slaveRegion">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">注册时间</span>
+                    <span class="info-value" id="slaveRegistered">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">最后心跳</span>
+                    <span class="info-value" id="slaveHeartbeat">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">健康状态</span>
+                    <span class="info-value" id="slaveHealth">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">当前任务</span>
+                    <span class="info-value" id="slaveCurrentTask">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 系统资源 -->
+        <div class="detail-section">
+            <h3>系统资源</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">CPU 核心数</span>
+                    <span class="info-value" id="slaveCpuCores">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">CPU 使用率</span>
+                    <span class="info-value" id="slaveCpuUsage">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">内存总量</span>
+                    <span class="info-value" id="slaveMemoryTotal">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">内存使用率</span>
+                    <span class="info-value" id="slaveMemoryUsage">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 任务历史 -->
+        <div class="detail-section">
+            <h3>任务历史 (<span id="taskCount">0</span>)</h3>
+            <div class="task-list" id="taskList">
+                <p style="color: #999;">暂无任务历史</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/http-client.js"></script>
+    <script src="/slave_detail.js"></script>
+</body>
+</html>

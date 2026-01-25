@@ -17,6 +17,7 @@ import (
 	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/distributed/common"
 	pb "github.com/kamalyes/go-stress/distributed/proto"
+	"github.com/kamalyes/go-stress/statistics"
 )
 
 // SlaveServiceServer Slave 服务实现
@@ -151,4 +152,118 @@ func (s *SlaveServiceServer) UpdateConfig(ctx context.Context, req *pb.ConfigUpd
 		Success: true,
 		Message: "Config updated successfully",
 	}, nil
+}
+
+// GetRequestDetails 获取请求详情
+func (s *SlaveServiceServer) GetRequestDetails(ctx context.Context, req *pb.DetailsRequest) (*pb.DetailsResponse, error) {
+	s.logger.DebugContextKV(ctx, "Received details query request",
+		"slave_id", req.SlaveId,
+		"task_id", req.TaskId,
+		"offset", req.Offset,
+		"limit", req.Limit,
+		"status", req.Status)
+
+	// 验证 slave_id
+	if req.SlaveId != s.slave.info.ID {
+		return &pb.DetailsResponse{
+			Total:  0,
+			Offset: req.Offset,
+			Limit:  req.Limit,
+		}, fmt.Errorf("slave_id mismatch: expected %s, got %s", s.slave.info.ID, req.SlaveId)
+	}
+
+	// 限制每次最多返回 1000 条
+	limit := int(req.Limit)
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	// 解析状态过滤参数
+	statusFilter := parseStatusFilterFromString(req.Status)
+
+	// 从 Collector 获取存储
+	collectorInterface := s.slave.GetCollector()
+	if collectorInterface == nil {
+		s.logger.WarnContext(ctx, "Collector is nil, no task executed yet")
+		return &pb.DetailsResponse{
+			Total:  0,
+			Offset: req.Offset,
+			Limit:  int32(limit),
+		}, nil
+	}
+
+	collector, ok := collectorInterface.(*statistics.Collector)
+	if !ok {
+		s.logger.ErrorContext(ctx, "Failed to cast collector")
+		return &pb.DetailsResponse{
+			Total:  0,
+			Offset: req.Offset,
+			Limit:  int32(limit),
+		}, fmt.Errorf("failed to get collector")
+	}
+
+	// 查询详情
+	details := collector.GetRequestDetails(int(req.Offset), limit, statusFilter, req.SlaveId, req.TaskId)
+	totalCount := collector.GetRequestDetailsCount(statusFilter, req.SlaveId, req.TaskId)
+
+	s.logger.InfoContextKV(ctx, "Queried details from collector",
+		"total_count", totalCount,
+		"details_count", len(details),
+		"offset", req.Offset,
+		"limit", limit,
+		"status_filter", statusFilter)
+
+	// 获取实际计数器数据
+	metrics := collector.GetMetrics()
+
+	// 转换为 proto 消息
+	pbDetails := make([]*pb.RequestDetail, 0, len(details))
+	for _, d := range details {
+		pbDetails = append(pbDetails, &pb.RequestDetail{
+			Id:              d.ID,
+			Timestamp:       d.Timestamp.UnixMilli(),
+			Duration:        int64(d.Duration),
+			StatusCode:      int32(d.StatusCode),
+			Success:         d.Success,
+			Skipped:         d.Skipped,
+			SkipReason:      d.SkipReason,
+			GroupId:         d.GroupID,
+			ApiName:         d.APIName,
+			Error:           d.ErrorMsg,
+			Size:            d.Size,
+			Url:             d.URL,
+			Method:          d.Method,
+			Query:           d.Query,
+			Headers:         d.Headers,
+			Body:            d.Body,
+			ResponseBody:    d.ResponseBody,
+			ResponseHeaders: d.ResponseHeaders,
+			ExtractedVars:   d.ExtractedVars,
+		})
+	}
+
+	return &pb.DetailsResponse{
+		Total:         int32(totalCount),
+		Offset:        req.Offset,
+		Limit:         int32(limit),
+		Details:       pbDetails,
+		TotalRequests: int64(metrics.TotalRequests),
+		SuccessCount:  int64(metrics.SuccessRequests),
+		FailedCount:   int64(metrics.FailedRequests),
+		SkippedCount:  int64(metrics.TotalRequests - metrics.SuccessRequests - metrics.FailedRequests),
+	}, nil
+}
+
+// parseStatusFilterFromString 从字符串解析状态过滤器
+func parseStatusFilterFromString(status string) statistics.StatusFilter {
+	switch status {
+	case "success":
+		return statistics.StatusFilterSuccess
+	case "failed":
+		return statistics.StatusFilterFailed
+	case "skipped":
+		return statistics.StatusFilterSkipped
+	default:
+		return statistics.StatusFilterAll
+	}
 }

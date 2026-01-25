@@ -96,6 +96,64 @@ body {
     color: #495057;
 }
 
+.config-info {
+    background: linear-gradient(135deg, #f0f4ff 0%, #e6f0ff 100%);
+    padding: 20px 25px;
+    margin: 20px 0;
+    border-radius: 12px;
+    border-left: 4px solid #667eea;
+}
+
+.config-info h3 {
+    margin: 0 0 15px 0;
+    color: #495057;
+    font-size: 1.1em;
+}
+
+.config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+}
+
+.config-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 15px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.config-label {
+    font-weight: 600;
+    color: #6c757d;
+    min-width: 90px;
+}
+
+.config-value {
+    color: #495057;
+    font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    word-break: break-all;
+}
+
+.protocol-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.9em;
+    font-weight: 600;
+}
+
+.protocol-http { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+.protocol-https { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; }
+.protocol-grpc { background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%); color: white; }
+.protocol-websocket { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; }
+.protocol-wss { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); color: white; }
+
 .metrics-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

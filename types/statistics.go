@@ -16,35 +16,39 @@ import (
 	"github.com/kamalyes/go-toolbox/pkg/validator"
 )
 
-// RequestResult 请求结果（用于统计）
+// RequestResult 请求结果（用于统计和存储）
 type RequestResult struct {
-	Success    bool          // 是否成功
-	StatusCode int           // HTTP 状态码
-	Duration   time.Duration // 请求耗时
-	Size       float64       // 响应大小
-	Error      error         // 错误信息
-	Timestamp  time.Time     // 时间戳
-	Skipped    bool          // 是否被跳过（因依赖失败）
-	SkipReason string        // 跳过原因（记录具体哪个依赖API失败）
-	GroupID    uint64        // 分组ID（同一个worker的依赖链共享同一个GroupID）
-	APIName    string        // API名称（如 create_ticket, send_message）
+	ID         string        `json:"id"`                    // 唯一ID（Snowflake生成）
+	NodeID     string        `json:"node_id,omitempty"`    // 节点ID（分布式模式下标识数据来源，单机模式为"local"）
+	TaskID     string        `json:"task_id,omitempty"`    // 任务ID（分布式模式由Master分配，单机模式生成唯一ID）
+	Success    bool          `json:"success"`               // 是否成功
+	StatusCode int           `json:"status_code"`           // HTTP 状态码
+	Duration   time.Duration `json:"duration"`              // 请求耗时
+	Size       float64       `json:"size"`                  // 响应大小
+	Error      error         `json:"-"`                     // 错误信息（不序列化）
+	ErrorMsg   string        `json:"error,omitempty"`       // 错误消息（用于存储和序列化）
+	Timestamp  time.Time     `json:"timestamp"`             // 时间戳
+	Skipped    bool          `json:"skipped"`               // 是否被跳过（因依赖失败）
+	SkipReason string        `json:"skip_reason,omitempty"` // 跳过原因（记录具体哪个依赖API失败）
+	GroupID    uint64        `json:"group_id"`              // 分组ID（同一个worker的依赖链共享同一个GroupID）
+	APIName    string        `json:"api_name,omitempty"`    // API名称（如 create_ticket, send_message）
 
 	// 请求详情
-	URL     string            // 请求URL
-	Method  string            // 请求方法
-	Query   string            // Query参数
-	Headers map[string]string // 请求头
-	Body    string            // 请求体
+	URL     string            `json:"url,omitempty"`     // 请求URL
+	Method  string            `json:"method,omitempty"`  // 请求方法
+	Query   string            `json:"query,omitempty"`   // Query参数
+	Headers map[string]string `json:"headers,omitempty"` // 请求头
+	Body    string            `json:"body,omitempty"`    // 请求体
 
 	// 响应详情
-	ResponseBody    string            // 响应体
-	ResponseHeaders map[string]string // 响应头
+	ResponseBody    string            `json:"response_body,omitempty"`    // 响应体
+	ResponseHeaders map[string]string `json:"response_headers,omitempty"` // 响应头
 
 	// 验证信息
-	Verifications []VerificationResult // 验证结果列表
+	Verifications []VerificationResult `json:"verifications,omitempty"` // 验证结果列表
 
 	// 提取变量
-	ExtractedVars map[string]string // 提取的变量
+	ExtractedVars map[string]string `json:"extracted_vars,omitempty"` // 提取的变量
 }
 
 // VerificationResult 验证结果
@@ -79,9 +83,9 @@ type Statistics struct {
 	SuccessRequests uint64        // 成功请求数
 	FailedRequests  uint64        // 失败请求数
 	TotalDuration   time.Duration // 总耗时
-	MinDuration     time.Duration // 最小耗时
-	MaxDuration     time.Duration // 最大耗时
-	AvgDuration     time.Duration // 平均耗时
+	MinLatency      time.Duration // 最小延迟
+	MaxLatency      time.Duration // 最大延迟
+	AvgLatency      time.Duration // 平均延迟
 }
 
 // ReportMode 报告模式
@@ -104,14 +108,14 @@ type ReportData struct {
 	SuccessRate     float64 `json:"success_rate"`     // 成功率（0-100）
 
 	// 性能指标
-	QPS         float64       `json:"qps"`          // 每秒请求数
-	MinDuration time.Duration `json:"min_duration"` // 最小耗时
-	MaxDuration time.Duration `json:"max_duration"` // 最大耗时
-	AvgDuration time.Duration `json:"avg_duration"` // 平均耗时
-	P50Duration time.Duration `json:"p50_duration"` // P50耗时
-	P90Duration time.Duration `json:"p90_duration"` // P90耗时
-	P95Duration time.Duration `json:"p95_duration"` // P95耗时
-	P99Duration time.Duration `json:"p99_duration"` // P99耗时
+	QPS        float64       `json:"qps"`         // 每秒请求数
+	MinLatency time.Duration `json:"min_latency"` // 最小延迟
+	MaxLatency time.Duration `json:"max_latency"` // 最大延迟
+	AvgLatency time.Duration `json:"avg_latency"` // 平均延迟
+	P50Latency time.Duration `json:"p50_latency"` // P50延迟
+	P90Latency time.Duration `json:"p90_latency"` // P90延迟
+	P95Latency time.Duration `json:"p95_latency"` // P95延迟
+	P99Latency time.Duration `json:"p99_latency"` // P99延迟
 
 	// 数据量
 	TotalSize float64 `json:"total_size"` // 总数据量（字节）

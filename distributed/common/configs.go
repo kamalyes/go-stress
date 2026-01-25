@@ -42,6 +42,10 @@ type MasterConfig struct {
 	Secret            string        `json:"secret" yaml:"secret"`                     // Token 签名密钥
 	TokenExpiration   time.Duration `json:"token_expiration" yaml:"token_expiration"` // Token 过期时间
 	TokenIssuer       string        `json:"token_issuer" yaml:"token_issuer"`         // Token 签发人
+
+	// Slave 数量计算配置
+	WorkersPerSlave int `json:"workers_per_slave" yaml:"workers_per_slave"` // 每个 Slave 承担的 Worker 数量,默认 100
+	MinSlaveCount   int `json:"min_slave_count" yaml:"min_slave_count"`     // 最小 Slave 数量,默认 1
 }
 
 // SlaveConfig Slave 配置
@@ -49,6 +53,7 @@ type SlaveConfig struct {
 	SlaveID         string            `json:"slave_id" yaml:"slave_id"`
 	MasterAddr      string            `json:"master_addr" yaml:"master_addr"`
 	GRPCPort        int32             `json:"grpc_port" yaml:"grpc_port"`
+	RealtimePort    int               `json:"realtime_port" yaml:"realtime_port"` // 实时报告服务器端口（0表示禁用）
 	Region          string            `json:"region" yaml:"region"`
 	Labels          map[string]string `json:"labels" yaml:"labels"`
 	MaxConcurrency  int               `json:"max_concurrency" yaml:"max_concurrency"` // 最大并发任务数

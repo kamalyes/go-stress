@@ -50,7 +50,7 @@ func RunStandalone(opts StandaloneOptions) error {
 
 	// 从curl文件加载
 	if opts.CurlFile != "" {
-		opts.Logger.Info("📄 解析curl文件: %s", opts.CurlFile)
+		opts.Logger.InfoKV("📄 解析curl文件", "file", opts.CurlFile)
 		cfg, err = config.ParseCurlFile(opts.CurlFile)
 		if err != nil {
 			return fmt.Errorf("解析curl文件失败: %w", err)
@@ -67,7 +67,7 @@ func RunStandalone(opts StandaloneOptions) error {
 		}
 	} else if opts.ConfigFile != "" {
 		// 从配置文件加载
-		opts.Logger.Info("📄 加载配置文件: %s", opts.ConfigFile)
+		opts.Logger.InfoKV("📄 加载配置文件", "file", opts.ConfigFile)
 		loader := config.NewLoader()
 		cfg, err = loader.LoadFromFile(opts.ConfigFile)
 		if err != nil {
@@ -101,7 +101,7 @@ func RunStandalone(opts StandaloneOptions) error {
 		}
 		dbPath := filepath.Join(reportDir, "details.db")
 		opts.Logger.Info("💾 存储模式: SQLite (持久化、无限制、可查询)")
-		opts.Logger.Info("💾 数据库路径: %s", dbPath)
+		opts.Logger.InfoKV("💾 数据库路径", "path", dbPath)
 		exec, err = executor.NewExecutorWithSQLiteStorage(cfg, dbPath)
 
 	default:

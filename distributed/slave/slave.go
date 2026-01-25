@@ -23,6 +23,7 @@ import (
 	"github.com/kamalyes/go-stress/distributed/common"
 	pb "github.com/kamalyes/go-stress/distributed/proto"
 	"github.com/kamalyes/go-stress/executor"
+	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-toolbox/pkg/netx"
 	"github.com/kamalyes/go-toolbox/pkg/osx"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
@@ -37,6 +38,7 @@ type Slave struct {
 	config        *common.SlaveConfig
 	info          *common.SlaveInfo
 	executor      *executor.Executor
+	collector     *statistics.Collector // 持久化 Collector，用于查询历史数据
 	statsBuffer   *StatsBuffer
 	monitor       *ResourceMonitor
 	grpcServer    *grpc.Server
@@ -63,21 +65,23 @@ func NewSlave(config *common.SlaveConfig, log logger.ILogger) (*Slave, error) {
 	}
 
 	info := &common.SlaveInfo{
-		ID:       config.SlaveID,
-		Hostname: hostname,
-		IP:       localIP,
-		GRPCPort: config.GRPCPort,
-		CPUCores: runtime.NumCPU(),
-		Memory:   getMemorySize(),
-		Version:  "1.0.0",
-		Region:   config.Region,
-		Labels:   config.Labels,
-		State:    common.SlaveStateIdle,
+		ID:           config.SlaveID,
+		Hostname:     hostname,
+		IP:           localIP,
+		GRPCPort:     config.GRPCPort,
+		RealtimePort: config.RealtimePort, // 实时报告服务器端口
+		CPUCores:     runtime.NumCPU(),
+		Memory:       getMemorySize(),
+		Version:      "1.0.0",
+		Region:       config.Region,
+		Labels:       config.Labels,
+		State:        common.SlaveStateIdle,
 	}
 
 	slave := &Slave{
 		config:        config,
 		info:          info,
+		collector:     statistics.NewCollectorWithMemoryStorage(config.SlaveID), // 创建持久化的 Collector
 		statsBuffer:   NewStatsBuffer(config.SlaveID, config.ReportBuffer, log),
 		monitor:       NewResourceMonitor(log, 5*time.Second),
 		logger:        log,
@@ -309,13 +313,20 @@ func (s *Slave) sendHeartbeat() error {
 	// 调用 Master 的 Heartbeat RPC
 	resp, err := s.masterClient.Heartbeat(ctx, req)
 	if err != nil {
-		s.logger.WarnKV("Heartbeat failed", "error", err)
-		return err
+		// 网络错误，可能 Master 正在重启，继续等待重连
+		s.logger.DebugKV("Heartbeat failed, will retry", "error", err)
+		return nil // 返回 nil 让 PeriodicTask 继续执行
 	}
 
 	if !resp.Ok {
-		s.logger.WarnKV("Heartbeat rejected", "message", resp.Message)
-		return fmt.Errorf("heartbeat rejected: %s", resp.Message)
+		// Master 不认识这个 Slave（可能重启了），尝试重新注册
+		s.logger.InfoKV("Heartbeat rejected, attempting re-registration", "message", resp.Message)
+		if err := s.register(); err != nil {
+			s.logger.WarnKV("Re-registration failed", "error", err)
+			return nil // 返回 nil 继续重试
+		}
+		s.logger.InfoKV("Re-registered successfully", "slave_id", s.info.ID)
+		return nil
 	}
 
 	s.logger.DebugKV("Heartbeat sent",
@@ -372,28 +383,72 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 	// 设置 worker 数量
 	cfg.Concurrency = uint64(taskConfig.WorkerCount)
 
-	// 创建 Executor
+	// 设置实时报告端口（使用 Slave 配置的端口）
+	if cfg.Advanced == nil {
+		cfg.Advanced = &config.AdvancedConfig{}
+	}
+	cfg.Advanced.RealtimePort = s.config.RealtimePort
+
+	// 创建 Executor，但不使用它的 Collector
 	executor, err := executor.NewExecutor(&cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create executor: %w", err)
 	}
 
+	// 替换 Executor 的 Collector 为 Slave 的持久化 Collector
+	executor.ReplaceCollector(s.collector)
+
 	// 设置外部上报器 - 传递 Add 方法作为回调
-	executor.GetCollector().SetExternalReporter(s.statsBuffer.Add)
+	s.collector.SetExternalReporter(s.statsBuffer.Add)
 	s.executor = executor
+
+	// 创建可取消的 context
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelFunc = cancel
 
 	// 使用 syncx.GoExecutor 在后台运行 Executor
 	syncx.Go().
 		OnError(func(err error) {
-			s.logger.ErrorKV("Executor failed", "error", err)
+			// 如果是用户中断（context canceled），不视为错误
+			if err.Error() == "执行压测失败: context canceled" ||
+				err.Error() == "context canceled" {
+				s.logger.Warn("⚠️  压测已被用户中断")
+			} else {
+				s.logger.ErrorKV("Executor failed", "error", err)
+			}
 			s.info.State = common.SlaveStateError
+			s.currentTaskID = ""
+			s.cancelFunc = nil
 		}).
 		OnPanic(func(r interface{}) {
 			s.logger.ErrorKV("Executor panicked", "panic", r)
 			s.info.State = common.SlaveStateError
+			s.currentTaskID = ""
+			s.cancelFunc = nil
 		}).
-		ExecWithContext(func(ctx context.Context) error {
+		ExecWithContext(func(execCtx context.Context) error {
 			_, err := s.executor.Run(ctx)
+
+			// 任务完成后通知 Master
+			success := err == nil
+			s.reportTaskCompletion(taskConfig.TaskID, success, err)
+
+			// 清理并更新状态
+			s.currentTaskID = ""
+			s.info.State = common.SlaveStateIdle
+			s.cancelFunc = nil
+
+			// 最后刷新一次统计数据
+			if flushErr := s.statsBuffer.Flush(); flushErr != nil {
+				s.logger.WarnKV("Failed to flush final stats", "error", flushErr)
+			}
+
+			// 关闭统计流
+			if closeErr := s.statsBuffer.CloseStream(); closeErr != nil {
+				s.logger.WarnKV("Failed to close stats stream", "error", closeErr)
+			}
+
+			s.logger.InfoKV("Task execution completed", "task_id", taskConfig.TaskID, "success", success)
 			return err
 		})
 
@@ -408,10 +463,14 @@ func (s *Slave) StopTask(taskID string) error {
 
 	s.logger.InfoKV("Stopping task", "task_id", taskID)
 
+	// 调用 context cancel 函数停止 Executor
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+		s.cancelFunc = nil
+	}
+
 	// 停止 Executor
 	if s.executor != nil {
-		// Executor 没有显式的 Stop 方法，但它会在 Run 完成后自动清理
-		// 这里我们只需要等待任务自然完成或者通过 context 取消
 		s.executor = nil
 	}
 
@@ -426,6 +485,49 @@ func (s *Slave) StopTask(taskID string) error {
 	}
 
 	return nil
+}
+
+// reportTaskCompletion 向 Master 报告任务完成
+func (s *Slave) reportTaskCompletion(taskID string, success bool, taskErr error) {
+	if s.masterClient == nil {
+		s.logger.WarnKV("Master client is nil, cannot report task completion", "task_id", taskID)
+		return
+	}
+
+	errorMsg := ""
+	if taskErr != nil {
+		errorMsg = taskErr.Error()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req := &pb.TaskCompletionRequest{
+		SlaveId:      s.info.ID,
+		TaskId:       taskID,
+		Success:      success,
+		ErrorMessage: errorMsg,
+		CompletedAt:  time.Now().UnixMilli(),
+	}
+
+	s.logger.InfoKV("Reporting task completion to Master",
+		"task_id", taskID,
+		"success", success,
+		"error", errorMsg)
+
+	resp, err := s.masterClient.ReportTaskCompletion(ctx, req)
+	if err != nil {
+		s.logger.ErrorKV("Failed to report task completion", "task_id", taskID, "error", err)
+		return
+	}
+
+	if !resp.Acknowledged {
+		s.logger.WarnKV("Master did not acknowledge task completion",
+			"task_id", taskID,
+			"message", resp.Message)
+	} else {
+		s.logger.InfoKV("Task completion acknowledged by Master", "task_id", taskID)
+	}
 }
 
 // getStatus 获取 Slave 状态
@@ -450,6 +552,11 @@ func (s *Slave) getStatus() *common.SlaveInfo {
 	}
 
 	return &status
+}
+
+// GetCollector 获取 Slave 的持久化 Collector（用于查询详情）
+func (s *Slave) GetCollector() interface{} {
+	return s.collector
 }
 
 // getMemorySize 获取系统总内存大小（字节）

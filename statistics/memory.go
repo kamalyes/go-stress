@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2026-01-24 15:30:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-24 16:00:00
+ * @LastEditTime: 2026-01-25 22:12:55
  * @FilePath: \go-stress\statistics\memory.go
  * @Description: 内存存储层 - 高速无限制存储（实现 DetailStorageInterface）
  *
@@ -18,10 +18,10 @@ import (
 // MemoryStorage 内存存储（按状态分类存储，高性能版本）
 type MemoryStorage struct {
 	// 按状态分类存储，提升查询性能
-	allDetails     []*RequestDetail // 全部记录（按时间倒序）
-	successDetails []*RequestDetail // 成功记录
-	failedDetails  []*RequestDetail // 失败记录
-	skippedDetails []*RequestDetail // 跳过记录
+	allDetails     []*RequestResult // 全部记录（按时间倒序）
+	successDetails []*RequestResult // 成功记录
+	failedDetails  []*RequestResult // 失败记录
+	skippedDetails []*RequestResult // 跳过记录
 
 	mu     *syncx.RWLock
 	nodeID string // 节点ID
@@ -40,10 +40,10 @@ func NewMemoryStorage(nodeID string, log logger.ILogger) *MemoryStorage {
 	log.Infof("💾 内存存储已启用 (节点: %s, 按状态分类存储)", nodeID)
 
 	return &MemoryStorage{
-		allDetails:     make([]*RequestDetail, 0, 10000),
-		successDetails: make([]*RequestDetail, 0, 8000),
-		failedDetails:  make([]*RequestDetail, 0, 1000),
-		skippedDetails: make([]*RequestDetail, 0, 1000),
+		allDetails:     make([]*RequestResult, 0, 10000),
+		successDetails: make([]*RequestResult, 0, 8000),
+		failedDetails:  make([]*RequestResult, 0, 1000),
+		skippedDetails: make([]*RequestResult, 0, 1000),
 		mu:             syncx.NewRWLock(),
 		nodeID:         nodeID,
 		logger:         log,
@@ -56,7 +56,7 @@ func NewMemoryStorage(nodeID string, log logger.ILogger) *MemoryStorage {
 }
 
 // Write 写入详情（按状态分类存储，实现 DetailStorageInterface）
-func (m *MemoryStorage) Write(detail *RequestDetail) {
+func (m *MemoryStorage) Write(detail *RequestResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -65,18 +65,18 @@ func (m *MemoryStorage) Write(detail *RequestDetail) {
 	}
 
 	// 写入全部记录（插入到头部，保持倒序）
-	m.allDetails = append([]*RequestDetail{detail}, m.allDetails...)
+	m.allDetails = append([]*RequestResult{detail}, m.allDetails...)
 	m.totalCount.Add(1)
 
 	// 根据状态分类存储
 	if detail.Skipped {
-		m.skippedDetails = append([]*RequestDetail{detail}, m.skippedDetails...)
+		m.skippedDetails = append([]*RequestResult{detail}, m.skippedDetails...)
 		m.skippedCount.Add(1)
 	} else if detail.Success {
-		m.successDetails = append([]*RequestDetail{detail}, m.successDetails...)
+		m.successDetails = append([]*RequestResult{detail}, m.successDetails...)
 		m.successCount.Add(1)
 	} else {
-		m.failedDetails = append([]*RequestDetail{detail}, m.failedDetails...)
+		m.failedDetails = append([]*RequestResult{detail}, m.failedDetails...)
 		m.failedCount.Add(1)
 	}
 
@@ -88,13 +88,13 @@ func (m *MemoryStorage) Write(detail *RequestDetail) {
 	}
 }
 
-// Query 查询详情（O(1) 定位 + O(limit) 复制，高性能）
-func (m *MemoryStorage) Query(offset, limit int, statusFilter StatusFilter) ([]*RequestDetail, error) {
+// Query 查询详情（O(1) 定位 + O(n) 过滤 + O(limit) 复制）
+func (m *MemoryStorage) Query(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) ([]*RequestResult, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	// 根据状态选择对应的切片（O(1)）
-	var source []*RequestDetail
+	var source []*RequestResult
 	switch statusFilter {
 	case StatusFilterSuccess:
 		source = m.successDetails
@@ -108,9 +108,24 @@ func (m *MemoryStorage) Query(offset, limit int, statusFilter StatusFilter) ([]*
 		source = m.allDetails
 	}
 
+	// 根据 nodeID 和 taskID 过滤
+	if nodeID != "" || taskID != "" {
+		filtered := make([]*RequestResult, 0, len(source))
+		for _, detail := range source {
+			if nodeID != "" && detail.NodeID != nodeID {
+				continue
+			}
+			if taskID != "" && detail.TaskID != taskID {
+				continue
+			}
+			filtered = append(filtered, detail)
+		}
+		source = filtered
+	}
+
 	// 分页（O(1) 切片操作）
 	if offset >= len(source) {
-		return []*RequestDetail{}, nil
+		return []*RequestResult{}, nil
 	}
 
 	end := offset + limit
@@ -121,21 +136,54 @@ func (m *MemoryStorage) Query(offset, limit int, statusFilter StatusFilter) ([]*
 	return source[offset:end], nil
 }
 
-// Count 统计总数（O(1) 原子读取，极高性能）
-func (m *MemoryStorage) Count(statusFilter StatusFilter) (int, error) {
-	// 直接从原子计数器读取，无需加锁遍历（O(1)）
+// Count 统计总数（支持 nodeID 和 taskID 过滤）
+func (m *MemoryStorage) Count(statusFilter StatusFilter, nodeID, taskID string) (int, error) {
+	// 如果没有 nodeID/taskID 过滤，直接从原子计数器读取（O(1)）
+	if nodeID == "" && taskID == "" {
+		switch statusFilter {
+		case StatusFilterSuccess:
+			return int(m.successCount.Load()), nil
+		case StatusFilterFailed:
+			return int(m.failedCount.Load()), nil
+		case StatusFilterSkipped:
+			return int(m.skippedCount.Load()), nil
+		case StatusFilterAll:
+			return int(m.totalCount.Load()), nil
+		default:
+			return int(m.totalCount.Load()), nil
+		}
+	}
+
+	// 有 nodeID/taskID 过滤时，需要遍历计数
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var source []*RequestResult
 	switch statusFilter {
 	case StatusFilterSuccess:
-		return int(m.successCount.Load()), nil
+		source = m.successDetails
 	case StatusFilterFailed:
-		return int(m.failedCount.Load()), nil
+		source = m.failedDetails
 	case StatusFilterSkipped:
-		return int(m.skippedCount.Load()), nil
+		source = m.skippedDetails
 	case StatusFilterAll:
-		return int(m.totalCount.Load()), nil
+		source = m.allDetails
 	default:
-		return int(m.totalCount.Load()), nil
+		source = m.allDetails
 	}
+
+	count := 0
+	for _, detail := range source {
+		if nodeID != "" && detail.NodeID != nodeID {
+			continue
+		}
+		if taskID != "" && detail.TaskID != taskID {
+			continue
+		}
+		count++
+	}
+
+	return count, nil
 }
 
 // Close 关闭存储（实现 DetailStorageInterface）

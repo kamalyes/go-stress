@@ -41,26 +41,34 @@ type MasterOptions struct {
 	AutoSubmit  bool                      // 是否自动提交任务（有配置时）
 	WaitSlaves  int                       // 等待的最小 Slave 数量
 	WaitTimeout time.Duration             // 等待 Slave 的超时时间
+
+	// Slave 数量计算配置
+	WorkersPerSlave int // 每个 Slave 承担的 Worker 数量,默认 100
+	MinSlaveCount   int // 最小需要的 Slave 数量,默认 1
+
+	// Master 配置
+	HeartbeatInterval time.Duration // 心跳间隔,默认 5s
+	HeartbeatTimeout  time.Duration // 心跳超时,默认 15s
+	MaxFailures       int           // 最大失败次数,默认 3
+	TokenExpiration   time.Duration // Token 过期时间,默认 24h
+	TokenIssuer       string        // Token 签发者,默认 "go-stress-master"
 }
 
 // RunMaster 运行 Master 节点
 func RunMaster(opts MasterOptions) error {
 	opts.Logger.Info("🎯 启动 Master 节点...")
 
-	// 使用默认密钥
-	if opts.Secret == "" {
-		opts.Secret = "go-stress-secret-key"
-	}
-
 	masterCfg := &common.MasterConfig{
 		GRPCPort:          opts.GRPCPort,
 		HTTPPort:          opts.HTTPPort,
-		HeartbeatInterval: 5 * time.Second,
-		HeartbeatTimeout:  15 * time.Second,
-		MaxFailures:       3,
-		Secret:            opts.Secret,
-		TokenExpiration:   24 * time.Hour,
-		TokenIssuer:       "go-stress-master",
+		HeartbeatInterval: opts.HeartbeatInterval, // 由 master.go 中 mathx.IfZero 兜底为 5s
+		HeartbeatTimeout:  opts.HeartbeatTimeout,  // 由 master.go 中 mathx.IfZero 兜底为 15s
+		MaxFailures:       opts.MaxFailures,       // 由 master.go 中 mathx.IfNotZero 兜底为 3
+		Secret:            opts.Secret,            // 由 master.go 中 mathx.IfEmpty 兜底为默认密钥
+		TokenExpiration:   opts.TokenExpiration,   // 由 master.go 中 mathx.IfZero 兜底为 24h
+		TokenIssuer:       opts.TokenIssuer,       // 由 master.go 中 mathx.IfEmpty 兜底为 "go-stress-master"
+		WorkersPerSlave:   opts.WorkersPerSlave,   // 由 master.go 中 mathx.IfNotZero 兜底为 100
+		MinSlaveCount:     opts.MinSlaveCount,     // 由 master.go 中 mathx.IfNotZero 兜底为 1
 	}
 
 	m, err := master.NewMaster(masterCfg, opts.Logger)

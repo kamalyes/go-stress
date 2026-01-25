@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 type LoginRequest struct {
@@ -98,6 +99,30 @@ type SendMessageResponse struct {
 var tokens = make(map[string]string)   // token -> userID
 var sessions = make(map[string]string) // sessionID -> ticketID
 
+// WebSocket 升级器
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // 允许所有来源,测试用
+	},
+}
+
+// WebSocket 消息类型
+type WSMessage struct {
+	Action    string                 `json:"action"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	MessageID int64                  `json:"message_id,omitempty"`
+	Timestamp int64                  `json:"timestamp"`
+}
+
+type WSResponse struct {
+	Success   bool                   `json:"success"`
+	Action    string                 `json:"action"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Message   string                 `json:"message,omitempty"`
+	MessageID int64                  `json:"message_id,omitempty"`
+	Timestamp int64                  `json:"timestamp"`
+}
+
 func main() {
 	http.HandleFunc("/api/login", handleLogin)
 	http.HandleFunc("/api/user/info", handleGetUserInfo)
@@ -108,8 +133,17 @@ func main() {
 	http.HandleFunc("/v1/tickets", handleCreateTicket)
 	http.HandleFunc("/v1/messages/send", handleSendMessage)
 
-	fmt.Println("🚀 测试服务器启动在 http://localhost:8081")
-	log.Fatal(http.ListenAndServe(":8081", nil))
+	// WebSocket 接口
+	http.HandleFunc("/ws", handleWebSocket)
+	http.HandleFunc("/ws/echo", handleWebSocketEcho)
+	http.HandleFunc("/ws/chat", handleWebSocketChat)
+
+	fmt.Println("🚀 测试服务器启动在 http://localhost:3000")
+	fmt.Println("📡 WebSocket 端点:")
+	fmt.Println("   - ws://localhost:3000/ws (通用)")
+	fmt.Println("   - ws://localhost:3000/ws/echo (回声)")
+	fmt.Println("   - ws://localhost:3000/ws/chat (聊天)")
+	log.Fatal(http.ListenAndServe(":3000", nil))
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -328,4 +362,167 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	log.Printf("✅ 发送消息: messageID=%s, sessionID=%s, ticketID=%s, content=%s",
 		messageID, req.SessionID, ticketID, req.Content)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// handleWebSocket 处理通用 WebSocket 连接
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("❌ WebSocket 升级失败: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	log.Printf("🔌 WebSocket 客户端连接: %s", r.RemoteAddr)
+
+	for {
+		var msg WSMessage
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("❌ WebSocket 读取错误: %v", err)
+			}
+			break
+		}
+
+		log.Printf("📥 收到消息: action=%s, data=%v", msg.Action, msg.Data)
+
+		// 构造响应
+		resp := WSResponse{
+			Success:   true,
+			Action:    msg.Action,
+			MessageID: msg.MessageID,
+			Timestamp: time.Now().Unix(),
+		}
+
+		// 根据不同的 action 处理
+		switch msg.Action {
+		case "ping":
+			resp.Data = map[string]interface{}{
+				"pong": true,
+			}
+		case "echo":
+			resp.Data = msg.Data
+		case "info":
+			resp.Data = map[string]interface{}{
+				"server":    "go-stress-testserver",
+				"version":   "1.0.0",
+				"timestamp": time.Now().Unix(),
+			}
+		default:
+			resp.Data = map[string]interface{}{
+				"received": msg.Action,
+				"echo":     msg.Data,
+			}
+		}
+
+		// 发送响应
+		err = conn.WriteJSON(resp)
+		if err != nil {
+			log.Printf("❌ WebSocket 写入错误: %v", err)
+			break
+		}
+
+		log.Printf("📤 发送响应: action=%s, success=%v", resp.Action, resp.Success)
+	}
+
+	log.Printf("🔌 WebSocket 客户端断开: %s", r.RemoteAddr)
+}
+
+// handleWebSocketEcho 回声服务器
+func handleWebSocketEcho(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("❌ WebSocket 升级失败: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	log.Printf("🔌 Echo 客户端连接: %s", r.RemoteAddr)
+
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("❌ Echo 读取错误: %v", err)
+			}
+			break
+		}
+
+		log.Printf("📥 Echo 收到: %s", string(message))
+
+		// 直接回送原消息
+		err = conn.WriteMessage(messageType, message)
+		if err != nil {
+			log.Printf("❌ Echo 写入错误: %v", err)
+			break
+		}
+
+		log.Printf("📤 Echo 发送: %s", string(message))
+	}
+
+	log.Printf("🔌 Echo 客户端断开: %s", r.RemoteAddr)
+}
+
+// handleWebSocketChat 模拟聊天服务器
+func handleWebSocketChat(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("❌ WebSocket 升级失败: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	userID := uuid.New().String()[:8]
+	log.Printf("🔌 Chat 客户端连接: %s (userID=%s)", r.RemoteAddr, userID)
+
+	// 发送欢迎消息
+	welcome := WSResponse{
+		Success:   true,
+		Action:    "welcome",
+		Timestamp: time.Now().Unix(),
+		Data: map[string]interface{}{
+			"user_id": userID,
+			"message": "欢迎来到聊天室",
+		},
+	}
+	conn.WriteJSON(welcome)
+
+	for {
+		var msg WSMessage
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("❌ Chat 读取错误: %v", err)
+			}
+			break
+		}
+
+		log.Printf("📥 Chat 收到: userID=%s, action=%s, data=%v", userID, msg.Action, msg.Data)
+
+		// 构造聊天响应
+		resp := WSResponse{
+			Success:   true,
+			Action:    "message",
+			MessageID: msg.MessageID,
+			Timestamp: time.Now().Unix(),
+			Data: map[string]interface{}{
+				"user_id":    userID,
+				"message_id": uuid.New().String(),
+				"content":    msg.Data["content"],
+				"echo":       true,
+			},
+		}
+
+		// 发送响应
+		err = conn.WriteJSON(resp)
+		if err != nil {
+			log.Printf("❌ Chat 写入错误: %v", err)
+			break
+		}
+
+		log.Printf("📤 Chat 发送: userID=%s, messageID=%v", userID, resp.Data["message_id"])
+	}
+
+	log.Printf("🔌 Chat 客户端断开: %s (userID=%s)", r.RemoteAddr, userID)
 }

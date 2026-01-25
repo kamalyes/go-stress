@@ -1,0 +1,37 @@
+# WebSocket 压测配置示例
+protocol: websocket
+url: ws://localhost:3000/ws
+method: POST
+
+# 并发配置
+concurrency: 10
+requests: 100
+timeout: 10s
+
+# WebSocket 消息体 - 支持参数化变量
+body: |
+  {
+    "action": "echo",
+    "message_id": {{seq}},
+    "data": {
+      "content": "测试消息 {{seq}}",
+      "user_id": "user_{{randomInt 1000 9999}}",
+      "timestamp": {{unix}}
+    }
+  }
+
+# 高级配置
+advanced:
+  enable_breaker: false
+  enable_retry: true
+  max_retry: 2
+  ramp_up: 5s
+
+# 实时监控
+realtime:
+  enabled: true
+  port: 8088
+
+# 存储配置
+storage:
+  mode: memory

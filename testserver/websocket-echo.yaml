@@ -1,0 +1,20 @@
+# WebSocket Echo 服务器压测
+protocol: websocket
+url: ws://localhost:3000/ws/echo
+method: POST
+
+concurrency: 20
+requests: 500
+timeout: 5s
+
+# 原始字符串回声
+body: |
+  Hello from go-stress {{seq}} at {{timestamp}}
+
+advanced:
+  enable_breaker: false
+  ramp_up: 3s
+
+realtime:
+  enabled: true
+  port: 8088

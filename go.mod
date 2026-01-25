@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/kamalyes/go-logger v0.4.6-0.20251220131326-ff4bf447209b
 	github.com/kamalyes/go-toolbox v0.11.87-0.20260125052739-096cf1a55b39
 	github.com/mattn/go-sqlite3 v1.14.33

@@ -71,7 +71,7 @@ func (s *MasterServiceServer) RegisterSlave(ctx context.Context, req *pb.SlaveIn
 		}, err
 	}
 
-	s.logger.Info("Slave registered successfully", "slave_id", req.SlaveId)
+	s.logger.InfoContextKV(ctx, "Slave registered successfully", "slave_id", req.SlaveId)
 
 	return &pb.RegisterResponse{
 		Success:           true,
@@ -120,19 +120,61 @@ func (s *MasterServiceServer) ReportStats(stream pb.MasterService_ReportStatsSer
 
 		// 转换并收集统计数据
 		slaveStats := &common.SlaveStats{
-			SlaveID:       stats.SlaveId,
-			TotalRequests: stats.TotalRequests,
-			SuccessCount:  stats.SuccessCount,
-			FailedCount:   stats.FailedCount,
-			AvgLatency:    stats.AvgLatency,
-			P95Latency:    stats.P95Latency,
-			P99Latency:    stats.P99Latency,
-			QPS:           stats.Qps,
-			StatusCodes:   convertStatusCodes(stats.StatusCodes),
+			SlaveID:         stats.SlaveId,
+			TaskID:          stats.TaskId,
+			TotalRequests:   stats.TotalRequests,
+			SuccessRequests: stats.SuccessRequests,
+			FailedRequests:  stats.FailedRequests,
+			AvgLatency:      stats.AvgLatency,
+			P95Latency:      stats.P95Latency,
+			P99Latency:      stats.P99Latency,
+			QPS:             stats.Qps,
+			StatusCodes:     convertStatusCodes(stats.StatusCodes),
+		}
+
+		// 计算成功率
+		if slaveStats.TotalRequests > 0 {
+			slaveStats.SuccessRate = float64(slaveStats.SuccessRequests) / float64(slaveStats.TotalRequests) * 100
 		}
 
 		s.master.collector.Collect(slaveStats)
 	}
+}
+
+// ReportTaskCompletion 接收任务完成通知
+func (s *MasterServiceServer) ReportTaskCompletion(ctx context.Context, req *pb.TaskCompletionRequest) (*pb.TaskCompletionResponse, error) {
+	s.logger.InfoContextKV(ctx, "Received task completion notification",
+		"task_id", req.TaskId,
+		"slave_id", req.SlaveId,
+		"success", req.Success)
+
+	// 更新任务状态
+	if req.Success {
+		if err := s.master.taskQueue.MoveToComplete(req.TaskId); err != nil {
+			s.logger.ErrorContextKV(ctx, "Failed to move task to complete", "task_id", req.TaskId, "error", err)
+			return &pb.TaskCompletionResponse{
+				Acknowledged: false,
+				Message:      fmt.Sprintf("Failed to update task state: %v", err),
+			}, nil
+		}
+	} else {
+		reason := req.ErrorMessage
+		if reason == "" {
+			reason = "Task failed without error message"
+		}
+		if err := s.master.taskQueue.MoveToFailed(req.TaskId, reason); err != nil {
+			s.logger.ErrorContextKV(ctx, "Failed to move task to failed", "task_id", req.TaskId, "error", err)
+			return &pb.TaskCompletionResponse{
+				Acknowledged: false,
+				Message:      fmt.Sprintf("Failed to update task state: %v", err),
+			}, nil
+		}
+	}
+
+	return &pb.TaskCompletionResponse{
+		Acknowledged: true,
+		Message:      "Task completion acknowledged",
+	}, nil
 }
 
 // UnregisterSlave 注销 Slave

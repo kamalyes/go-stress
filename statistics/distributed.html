@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分布式压测管理 - Go-Stress</title>
+    <link rel="stylesheet" href="/distributed.css">
+    <!-- Monaco Editor -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/editor/editor.main.css">
+</head>
+<body>
+    <div class="header">
+        <h1>🌐 分布式压测管理</h1>
+        <div class="header-actions">
+            <a href="/" class="btn-link">← 返回首页</a>
+        </div>
+    </div>
+
+    <div class="content">
+        <!-- 任务创建区域 -->
+        <div class="section">
+            <div class="section-header">
+                <h2>📋 创建压测任务</h2>
+                <div class="mode-switch">
+                    <button type="button" class="mode-btn" data-mode="form" onclick="switchMode('form')">
+                        📝 表单模式
+                    </button>
+                    <button type="button" class="mode-btn active" data-mode="code" onclick="switchMode('code')">
+                        💻 代码模式
+                    </button>
+                </div>
+            </div>
+            
+            <form id="taskForm" class="task-form">
+                <!-- 表单模式 -->
+                <div id="formMode" class="config-mode" style="display: none;">
+                    <div class="form-section">
+                        <h3>🎯 基本配置</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="protocol">协议 *</label>
+                                <select id="protocol" required>
+                                    <option value="http">HTTP/HTTPS</option>
+                                    <option value="grpc">gRPC</option>
+                                    <option value="websocket">WebSocket</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="method">请求方法 *</label>
+                                <select id="method" required>
+                                    <option value="GET">GET</option>
+                                    <option value="POST">POST</option>
+                                    <option value="PUT">PUT</option>
+                                    <option value="DELETE">DELETE</option>
+                                    <option value="PATCH">PATCH</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="url">目标 URL *</label>
+                            <input type="text" id="url" placeholder="https://api.example.com" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="path">请求路径</label>
+                            <input type="text" id="path" placeholder="/api/v1/users">
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>⚙️ 压测参数</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="concurrency">并发数 *</label>
+                                <input type="number" id="concurrency" value="2" min="1" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="requests">请求总数 *</label>
+                                <input type="number" id="requests" value="10" min="1" required>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="duration">持续时间(秒)</label>
+                                <input type="number" id="duration" value="60" min="1">
+                            </div>
+                            <div class="form-group">
+                                <label for="timeout">超时时间(秒)</label>
+                                <input type="number" id="timeout" value="30" min="1">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="rampUp">渐进启动时间(秒)</label>
+                            <input type="number" id="rampUp" value="0" min="0">
+                            <small>逐步增加并发数，避免瞬时冲击</small>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>📨 请求配置</h3>
+                        <div class="form-group">
+                            <label>
+                                请求头 (Headers)
+                                <button type="button" class="btn-small" onclick="addHeader()">+ 添加</button>
+                            </label>
+                            <div id="headersList" class="key-value-list">
+                                <div class="key-value-item">
+                                    <input type="text" list="headerKeyList-default" placeholder="选择或输入 Key" value="Content-Type">
+                                    <datalist id="headerKeyList-default">
+                                        <option value="Accept">
+                                        <option value="Accept-Encoding">
+                                        <option value="Accept-Language">
+                                        <option value="Authorization">
+                                        <option value="Cache-Control">
+                                        <option value="Connection">
+                                        <option value="Content-Length">
+                                        <option value="Content-Type">
+                                        <option value="Cookie">
+                                        <option value="Host">
+                                        <option value="Origin">
+                                        <option value="Referer">
+                                        <option value="User-Agent">
+                                        <option value="X-Api-Key">
+                                        <option value="X-Auth-Token">
+                                        <option value="X-Requested-With">
+                                        <option value="X-Request-ID">
+                                        <option value="X-Trace-ID">
+                                    </datalist>
+                                    <input type="text" placeholder="Value" value="application/json">
+                                    <button type="button" class="btn-remove" onclick="removeItem(this)">×</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="body">请求体 (Body)</label>
+                            <textarea id="body" rows="4" placeholder='{"key": "value"}'></textarea>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>✅ 响应校验</h3>
+                        <div class="form-group">
+                            <label>
+                                校验规则
+                                <button type="button" class="btn-small" onclick="addVerify()">+ 添加</button>
+                            </label>
+                            <div id="verifyList" class="verify-list">
+                                <!-- 动态添加校验规则 -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>🔗 数据提取器</h3>
+                        <div class="form-group">
+                            <label>
+                                提取规则
+                                <button type="button" class="btn-small" onclick="addExtractor()">+ 添加</button>
+                            </label>
+                            <div id="extractorsList" class="extractor-list">
+                                <!-- 动态添加提取器 -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="preview-section">
+                        <button type="button" class="btn btn-secondary" onclick="previewConfig()">
+                            👁️ 预览生成的配置
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 代码模式 -->
+                <div id="codeMode" class="config-mode">
+                    <div class="form-group">
+                        <label for="configFile">
+                            配置内容（YAML/JSON）
+                            <span class="editor-controls">
+                                <button type="button" class="btn-small" onclick="formatConfig()">🔧 格式化</button>
+                                <button type="button" class="btn-small" onclick="validateConfig()">✅ 校验</button>
+                                <button type="button" class="btn-small" onclick="importFromForm()">📥 从表单导入</button>
+                                <select id="editorLang" onchange="switchEditorLanguage(this.value)">
+                                    <option value="yaml" selected>YAML</option>
+                                    <option value="json">JSON</option>
+                                </select>
+                            </span>
+                        </label>
+                        <div id="configEditor" style="height: 300px; border: 1px solid #ddd; border-radius: 4px;"></div>
+                        <div id="validationMessage" class="validation-message"></div>
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">📝 创建任务</button>
+            </form>
+        </div>
+
+        <!-- Slave 节点状态 -->
+        <div class="section">
+            <div class="section-header">
+                <h2>🤖 Slave 节点状态</h2>
+                <div class="stats-summary">
+                    <span class="stat-item">总数: <strong id="totalSlaves">0</strong></span>
+                    <span class="stat-item">空闲: <strong id="idleCount" style="color: #38ef7d;">0</strong></span>
+                    <span class="stat-item">运行中: <strong id="runningCount" style="color: #4285f4;">0</strong></span>
+                    <span class="stat-item">离线: <strong id="offlineCount" style="color: #6c757d;">0</strong></span>
+                    <span class="stat-item">错误: <strong id="errorCount" style="color: #f45c43;">0</strong></span>
+                </div>
+            </div>
+            <div class="slave-grid" id="slaveGrid">
+                <!-- 动态加载 Slave 卡片 -->
+            </div>
+        </div>
+
+        <!-- 任务列表 -->
+        <div class="section">
+            <div class="section-header">
+                <h2>📊 任务列表</h2>
+                <div class="task-filters">
+                    <button class="filter-btn active" data-filter="all">全部</button>
+                    <button class="filter-btn" data-filter="running">运行中</button>
+                    <button class="filter-btn" data-filter="completed">已完成</button>
+                    <button class="filter-btn" data-filter="failed">失败</button>
+                </div>
+            </div>
+            <div id="taskList" class="task-list">
+                <!-- 动态加载任务列表 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Monaco Editor Loader -->
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    <!-- js-yaml 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+    <script>
+        // 确保 jsyaml 全局可用
+        console.log('js-yaml 库状态:', typeof jsyaml !== 'undefined' ? '✅ 已加载' : '❌ 未加载');
+        if (typeof jsyaml === 'undefined' && typeof window.jsyaml !== 'undefined') {
+            window.jsyaml = window.jsyaml;
+        }
+    </script>
+    <script src="/http-client.js"></script>
+    <script src="/distributed.js"></script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务详情 - Go-Stress 分布式管理</title>
+    <link rel="stylesheet" href="/distributed.css">
+    <link rel="stylesheet" href="/task_detail.css">
+</head>
+<body>
+    <div class="detail-container">
+        <div class="detail-header">
+            <h1>📊 任务详情</h1>
+            <div class="header-actions">
+                <button id="btnStop" class="btn btn-danger" style="display: none;" onclick="stopTask()">⏸️ 停止任务</button>
+                <a href="/distributed" class="btn btn-secondary">← 返回列表</a>
+            </div>
+        </div>
+
+        <!-- Slave 选择器（仅在 pending 状态显示） -->
+        <div class="slave-selector" id="slaveSelector" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h4 style="margin: 0;">🎯 选择执行节点</h4>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 13px;">
+                        <input type="checkbox" id="autoRefreshSlaves" checked>
+                        <span>自动刷新</span>
+                    </label>
+                    <select id="refreshInterval" style="padding: 5px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px;">
+                        <option value="3000">3秒</option>
+                        <option value="5000" selected>5秒</option>
+                        <option value="10000">10秒</option>
+                        <option value="30000">30秒</option>
+                    </select>
+                    <button onclick="loadAvailableSlaves()" class="btn btn-secondary" style="padding: 5px 15px; font-size: 13px;">🔄 手动刷新</button>
+                </div>
+            </div>
+            <div class="slave-options">
+                <div class="slave-option">
+                    <input type="radio" id="slaveAll" name="slaveSelection" value="all" checked>
+                    <label for="slaveAll">使用所有可用 Slave（默认分配策略）</label>
+                </div>
+                <div class="slave-option">
+                    <input type="radio" id="slaveSpecific" name="slaveSelection" value="specific">
+                    <label for="slaveSpecific">指定 Slave 节点：</label>
+                    <div class="slave-checkboxes" id="slaveCheckboxes"></div>
+                </div>
+                <div class="slave-option">
+                    <input type="radio" id="slaveRegion" name="slaveSelection" value="region">
+                    <label for="slaveRegion">按区域选择：</label>
+                    <select class="region-select" id="regionSelect">
+                        <option value="">-- 选择区域 --</option>
+                    </select>
+                </div>
+            </div>
+            <button id="btnStart" class="btn btn-primary" style="margin-top: 15px;" onclick="startTask()">▶️ 启动任务</button>
+        </div>
+
+        <!-- 基本信息 -->
+        <div class="detail-section" id="basicInfo">
+            <h3>基本信息</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">任务 ID</span>
+                    <span class="info-value" id="taskId">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">状态</span>
+                    <span class="info-value" id="taskStatus">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">协议</span>
+                    <span class="info-value" id="taskProtocol">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">总并发数</span>
+                    <span class="info-value" id="taskWorkers">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">持续时间</span>
+                    <span class="info-value" id="taskDuration">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">创建时间</span>
+                    <span class="info-value" id="taskCreated">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">开始时间</span>
+                    <span class="info-value" id="taskStarted">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分配的 Slave 节点 -->
+        <div class="detail-section">
+            <h3>分配的 Slave 节点 (<span id="slaveCount">0</span>)</h3>
+            <div class="slave-list" id="slaveList">
+                <p style="color: #999;">暂无数据</p>
+            </div>
+        </div>
+
+        <!-- 任务配置 -->
+        <div class="detail-section">
+            <h3>任务配置</h3>
+            <pre id="taskConfig" style="background: #f5f5f5; padding: 16px; border-radius: 4px; overflow-x: auto;">加载中...</pre>
+        </div>
+    </div>
+
+    <script src="/http-client.js"></script>
+    <script src="/task_detail.js"></script>
+</body>
+</html>

@@ -29,16 +29,16 @@ type Report struct {
 	SuccessRate     float64 `json:"success_rate"`     // 百分比 0-100
 
 	// 时间统计
-	TotalTime   time.Duration `json:"total_time"`
-	MinDuration time.Duration `json:"min_duration"`
-	MaxDuration time.Duration `json:"max_duration"`
-	AvgDuration time.Duration `json:"avg_duration"`
+	TotalTime  time.Duration `json:"total_time"`
+	MinLatency time.Duration `json:"min_latency"`
+	MaxLatency time.Duration `json:"max_latency"`
+	AvgLatency time.Duration `json:"avg_latency"`
 
 	// 百分位统计
-	P50 time.Duration `json:"p50"`
-	P90 time.Duration `json:"p90"`
-	P95 time.Duration `json:"p95"`
-	P99 time.Duration `json:"p99"`
+	P50Latency time.Duration `json:"p50_latency"`
+	P90Latency time.Duration `json:"p90_latency"`
+	P95Latency time.Duration `json:"p95_latency"`
+	P99Latency time.Duration `json:"p99_latency"`
 
 	// 性能指标
 	QPS       float64 `json:"qps"`
@@ -51,7 +51,7 @@ type Report struct {
 	StatusCodes map[int]uint64 `json:"status_codes,omitempty"`
 
 	// 请求明细（静态报告用，实时报告不加载）
-	RequestDetails []*RequestDetail `json:"request_details,omitempty"`
+	RequestDetails []*RequestResult `json:"request_details,omitempty"`
 
 	// === 实时报告专用字段 ===
 	Timestamp       int64   `json:"timestamp,omitempty"`        // Unix时间戳
@@ -62,7 +62,12 @@ type Report struct {
 	RecentDurations []int64 `json:"recent_durations,omitempty"` // 最近响应时间（毫秒）用于实时图表
 
 	// 运行模式标识
-	RunMode string `json:"run_mode,omitempty"` // "cli" 或 "config"，用于前端判断是否显示GroupID/APIName
+	RunMode RunMode `json:"run_mode,omitempty"`
+
+	// 配置信息（用于报告显示）
+	Protocol    string `json:"protocol,omitempty"`    // 协议类型: http/grpc/websocket
+	Concurrency uint64 `json:"concurrency,omitempty"` // 并发数
+	TotalReqs   uint64 `json:"total_reqs,omitempty"`  // 计划请求数
 }
 
 // Print 打印报告（使用单个多列表格）
@@ -79,7 +84,7 @@ func (r *Report) Print() {
 			"值":   fmt.Sprintf("%d", r.TotalRequests),
 			"分类2": "⏱️  响应时间",
 			"指标2": "最小耗时",
-			"值2":  r.MinDuration.String(),
+			"值2":  r.MinLatency.String(),
 		},
 		{
 			"分类":  "📈 基础统计",
@@ -87,7 +92,7 @@ func (r *Report) Print() {
 			"值":   fmt.Sprintf("%d", r.SuccessRequests),
 			"分类2": "⏱️  响应时间",
 			"指标2": "最大耗时",
-			"值2":  r.MaxDuration.String(),
+			"值2":  r.MaxLatency.String(),
 		},
 		{
 			"分类":  "📈 基础统计",
@@ -95,7 +100,7 @@ func (r *Report) Print() {
 			"值":   fmt.Sprintf("%d", r.FailedRequests),
 			"分类2": "⏱️  响应时间",
 			"指标2": "平均耗时",
-			"值2":  r.AvgDuration.String(),
+			"值2":  r.AvgLatency.String(),
 		},
 		{
 			"分类":  "📈 基础统计",
@@ -103,7 +108,7 @@ func (r *Report) Print() {
 			"值":   fmt.Sprintf("%.2f%%", r.SuccessRate),
 			"分类2": "⏱️  响应时间",
 			"指标2": "P50",
-			"值2":  r.P50.String(),
+			"值2":  r.P50Latency.String(),
 		},
 		{
 			"分类":  "⚡ 性能指标",
@@ -111,7 +116,7 @@ func (r *Report) Print() {
 			"值":   r.TotalTime.String(),
 			"分类2": "⏱️  响应时间",
 			"指标2": "P90",
-			"值2":  r.P90.String(),
+			"值2":  r.P90Latency.String(),
 		},
 		{
 			"分类":  "⚡ 性能指标",
@@ -119,7 +124,7 @@ func (r *Report) Print() {
 			"值":   fmt.Sprintf("%.2f", r.QPS),
 			"分类2": "⏱️  响应时间",
 			"指标2": "P95",
-			"值2":  r.P95.String(),
+			"值2":  r.P95Latency.String(),
 		},
 		{
 			"分类":  "⚡ 性能指标",
@@ -127,7 +132,7 @@ func (r *Report) Print() {
 			"值":   units.BytesSize(float64(r.TotalSize)),
 			"分类2": "⏱️  响应时间",
 			"指标2": "P99",
-			"值2":  r.P99.String(),
+			"值2":  r.P99Latency.String(),
 		},
 	}
 
@@ -161,7 +166,7 @@ func (r *Report) Summary() string {
 		r.TotalRequests,
 		r.SuccessRate,
 		r.QPS,
-		r.AvgDuration,
+		r.AvgLatency,
 	)
 }
 
@@ -171,23 +176,23 @@ func (r *Report) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
 		*Alias
 		// 添加毫秒格式的字段供前端使用
-		AvgDurationMs float64 `json:"avg_duration_ms"`
-		MinDurationMs float64 `json:"min_duration_ms"`
-		MaxDurationMs float64 `json:"max_duration_ms"`
-		P50Ms         float64 `json:"p50_ms"`
-		P90Ms         float64 `json:"p90_ms"`
-		P95Ms         float64 `json:"p95_ms"`
-		P99Ms         float64 `json:"p99_ms"`
-		TotalTimeMs   float64 `json:"total_time_ms"`
+		AvgLatency  float64 `json:"avg_latency"`
+		MinLatency  float64 `json:"min_latency"`
+		MaxLatency  float64 `json:"max_latency"`
+		P50Latency  float64 `json:"p50_latency"`
+		P90Latency  float64 `json:"p90_latency"`
+		P95Latency  float64 `json:"p95_latency"`
+		P99Latency  float64 `json:"p99_latency"`
+		TotalTimeMs float64 `json:"total_time_ms"`
 	}{
-		Alias:         (*Alias)(r),
-		AvgDurationMs: float64(r.AvgDuration.Microseconds()) / 1000.0,
-		MinDurationMs: float64(r.MinDuration.Microseconds()) / 1000.0,
-		MaxDurationMs: float64(r.MaxDuration.Microseconds()) / 1000.0,
-		P50Ms:         float64(r.P50.Microseconds()) / 1000.0,
-		P90Ms:         float64(r.P90.Microseconds()) / 1000.0,
-		P95Ms:         float64(r.P95.Microseconds()) / 1000.0,
-		P99Ms:         float64(r.P99.Microseconds()) / 1000.0,
-		TotalTimeMs:   float64(r.TotalTime.Microseconds()) / 1000.0,
+		Alias:       (*Alias)(r),
+		AvgLatency:  float64(r.AvgLatency.Microseconds()) / 1000.0,
+		MinLatency:  float64(r.MinLatency.Microseconds()) / 1000.0,
+		MaxLatency:  float64(r.MaxLatency.Microseconds()) / 1000.0,
+		P50Latency:  float64(r.P50Latency.Microseconds()) / 1000.0,
+		P90Latency:  float64(r.P90Latency.Microseconds()) / 1000.0,
+		P95Latency:  float64(r.P95Latency.Microseconds()) / 1000.0,
+		P99Latency:  float64(r.P99Latency.Microseconds()) / 1000.0,
+		TotalTimeMs: float64(r.TotalTime.Microseconds()) / 1000.0,
 	})
 }

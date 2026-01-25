@@ -144,7 +144,11 @@ func (s *RealtimeServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Write(htmlBytes)
+
+	// 注入 Favicon
+	html := injectFavicon(string(htmlBytes))
+
+	w.Write([]byte(html))
 }
 
 // handleCSS 提供CSS样式文件
@@ -251,6 +255,8 @@ func (s *RealtimeServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	offset := 0
 	limit := 100
+	nodeId := ""
+	taskId := ""
 	// 支持 status 参数：all | success | failed | skipped
 	statusParam := query.Get("status")
 	statusFilter := ParseStatusFilter(statusParam) // 使用枚举
@@ -262,13 +268,21 @@ func (s *RealtimeServer) handleDetails(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(l, "%d", &limit)
 	}
 
+	if l := query.Get("nodeId"); l != "" {
+		fmt.Sscanf(l, "%d", &nodeId)
+	}
+
+	if t := query.Get("taskId"); t != "" {
+		fmt.Sscanf(t, "%d", &taskId)
+	}
+
 	// 限制每次最多返回1000条
 	if limit > 1000 {
 		limit = 1000
 	}
 
-	details := s.collector.GetRequestDetails(offset, limit, statusFilter)
-	detailsCount := s.collector.GetRequestDetailsCount(statusFilter)
+	details := s.collector.GetRequestDetails(offset, limit, statusFilter, nodeId, taskId)
+	detailsCount := s.collector.GetRequestDetailsCount(statusFilter, nodeId, taskId)
 
 	// 直接从原子计数器读取统计数据（O(1)操作，无锁）
 	response := map[string]interface{}{

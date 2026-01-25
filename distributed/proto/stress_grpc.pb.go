@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MasterService_RegisterSlave_FullMethodName   = "/stress.MasterService/RegisterSlave"
-	MasterService_Heartbeat_FullMethodName       = "/stress.MasterService/Heartbeat"
-	MasterService_ReportStats_FullMethodName     = "/stress.MasterService/ReportStats"
-	MasterService_UnregisterSlave_FullMethodName = "/stress.MasterService/UnregisterSlave"
+	MasterService_RegisterSlave_FullMethodName        = "/stress.MasterService/RegisterSlave"
+	MasterService_Heartbeat_FullMethodName            = "/stress.MasterService/Heartbeat"
+	MasterService_ReportStats_FullMethodName          = "/stress.MasterService/ReportStats"
+	MasterService_ReportTaskCompletion_FullMethodName = "/stress.MasterService/ReportTaskCompletion"
+	MasterService_UnregisterSlave_FullMethodName      = "/stress.MasterService/UnregisterSlave"
 )
 
 // MasterServiceClient is the client API for MasterService service.
@@ -41,6 +42,9 @@ type MasterServiceClient interface {
 	// 上报统计数据（流式） | EN Report Statistics (Stream)
 	// 从节点以流式方式向主节点上报压测统计数据（支持批量/实时上报） | EN Slave node reports stress test statistics to master node in streaming mode (supports batch/realtime reporting)
 	ReportStats(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StatsData, ReportResponse], error)
+	// 任务完成通知 | EN Task Completion Notification
+	// 从节点在任务执行完成后通知主节点更新任务状态 | EN Slave node notifies master node to update task status after task execution completes
+	ReportTaskCompletion(ctx context.Context, in *TaskCompletionRequest, opts ...grpc.CallOption) (*TaskCompletionResponse, error)
 	// Slave 下线 | EN Slave Unregistration
 	// 从节点主动向主节点发起下线请求，注销自身信息 | EN Slave node actively initiates unregistration request to master node to cancel its information
 	UnregisterSlave(ctx context.Context, in *UnregisterRequest, opts ...grpc.CallOption) (*UnregisterResponse, error)
@@ -87,6 +91,16 @@ func (c *masterServiceClient) ReportStats(ctx context.Context, opts ...grpc.Call
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type MasterService_ReportStatsClient = grpc.ClientStreamingClient[StatsData, ReportResponse]
 
+func (c *masterServiceClient) ReportTaskCompletion(ctx context.Context, in *TaskCompletionRequest, opts ...grpc.CallOption) (*TaskCompletionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskCompletionResponse)
+	err := c.cc.Invoke(ctx, MasterService_ReportTaskCompletion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *masterServiceClient) UnregisterSlave(ctx context.Context, in *UnregisterRequest, opts ...grpc.CallOption) (*UnregisterResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UnregisterResponse)
@@ -113,6 +127,9 @@ type MasterServiceServer interface {
 	// 上报统计数据（流式） | EN Report Statistics (Stream)
 	// 从节点以流式方式向主节点上报压测统计数据（支持批量/实时上报） | EN Slave node reports stress test statistics to master node in streaming mode (supports batch/realtime reporting)
 	ReportStats(grpc.ClientStreamingServer[StatsData, ReportResponse]) error
+	// 任务完成通知 | EN Task Completion Notification
+	// 从节点在任务执行完成后通知主节点更新任务状态 | EN Slave node notifies master node to update task status after task execution completes
+	ReportTaskCompletion(context.Context, *TaskCompletionRequest) (*TaskCompletionResponse, error)
 	// Slave 下线 | EN Slave Unregistration
 	// 从节点主动向主节点发起下线请求，注销自身信息 | EN Slave node actively initiates unregistration request to master node to cancel its information
 	UnregisterSlave(context.Context, *UnregisterRequest) (*UnregisterResponse, error)
@@ -134,6 +151,9 @@ func (UnimplementedMasterServiceServer) Heartbeat(context.Context, *HeartbeatReq
 }
 func (UnimplementedMasterServiceServer) ReportStats(grpc.ClientStreamingServer[StatsData, ReportResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method ReportStats not implemented")
+}
+func (UnimplementedMasterServiceServer) ReportTaskCompletion(context.Context, *TaskCompletionRequest) (*TaskCompletionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportTaskCompletion not implemented")
 }
 func (UnimplementedMasterServiceServer) UnregisterSlave(context.Context, *UnregisterRequest) (*UnregisterResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UnregisterSlave not implemented")
@@ -202,6 +222,24 @@ func _MasterService_ReportStats_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type MasterService_ReportStatsServer = grpc.ClientStreamingServer[StatsData, ReportResponse]
 
+func _MasterService_ReportTaskCompletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TaskCompletionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MasterServiceServer).ReportTaskCompletion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MasterService_ReportTaskCompletion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MasterServiceServer).ReportTaskCompletion(ctx, req.(*TaskCompletionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MasterService_UnregisterSlave_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UnregisterRequest)
 	if err := dec(in); err != nil {
@@ -236,6 +274,10 @@ var MasterService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MasterService_Heartbeat_Handler,
 		},
 		{
+			MethodName: "ReportTaskCompletion",
+			Handler:    _MasterService_ReportTaskCompletion_Handler,
+		},
+		{
 			MethodName: "UnregisterSlave",
 			Handler:    _MasterService_UnregisterSlave_Handler,
 		},
@@ -251,10 +293,11 @@ var MasterService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SlaveService_ExecuteTask_FullMethodName  = "/stress.SlaveService/ExecuteTask"
-	SlaveService_StopTask_FullMethodName     = "/stress.SlaveService/StopTask"
-	SlaveService_GetStatus_FullMethodName    = "/stress.SlaveService/GetStatus"
-	SlaveService_UpdateConfig_FullMethodName = "/stress.SlaveService/UpdateConfig"
+	SlaveService_ExecuteTask_FullMethodName       = "/stress.SlaveService/ExecuteTask"
+	SlaveService_StopTask_FullMethodName          = "/stress.SlaveService/StopTask"
+	SlaveService_GetStatus_FullMethodName         = "/stress.SlaveService/GetStatus"
+	SlaveService_UpdateConfig_FullMethodName      = "/stress.SlaveService/UpdateConfig"
+	SlaveService_GetRequestDetails_FullMethodName = "/stress.SlaveService/GetRequestDetails"
 )
 
 // SlaveServiceClient is the client API for SlaveService service.
@@ -276,6 +319,9 @@ type SlaveServiceClient interface {
 	// 更新配置 | EN Update Configuration
 	// 主节点向从节点下发配置更新指令（如修改系统参数） | EN Master node sends configuration update instructions to slave node (e.g., modify system parameters)
 	UpdateConfig(ctx context.Context, in *ConfigUpdate, opts ...grpc.CallOption) (*UpdateResponse, error)
+	// 查询请求详情 | EN Query Request Details
+	// 主节点查询从节点的请求详情数据（支持分页和状态过滤） | EN Master node queries request details from slave node (supports pagination and status filtering)
+	GetRequestDetails(ctx context.Context, in *DetailsRequest, opts ...grpc.CallOption) (*DetailsResponse, error)
 }
 
 type slaveServiceClient struct {
@@ -326,6 +372,16 @@ func (c *slaveServiceClient) UpdateConfig(ctx context.Context, in *ConfigUpdate,
 	return out, nil
 }
 
+func (c *slaveServiceClient) GetRequestDetails(ctx context.Context, in *DetailsRequest, opts ...grpc.CallOption) (*DetailsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DetailsResponse)
+	err := c.cc.Invoke(ctx, SlaveService_GetRequestDetails_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SlaveServiceServer is the server API for SlaveService service.
 // All implementations must embed UnimplementedSlaveServiceServer
 // for forward compatibility.
@@ -345,6 +401,9 @@ type SlaveServiceServer interface {
 	// 更新配置 | EN Update Configuration
 	// 主节点向从节点下发配置更新指令（如修改系统参数） | EN Master node sends configuration update instructions to slave node (e.g., modify system parameters)
 	UpdateConfig(context.Context, *ConfigUpdate) (*UpdateResponse, error)
+	// 查询请求详情 | EN Query Request Details
+	// 主节点查询从节点的请求详情数据（支持分页和状态过滤） | EN Master node queries request details from slave node (supports pagination and status filtering)
+	GetRequestDetails(context.Context, *DetailsRequest) (*DetailsResponse, error)
 	mustEmbedUnimplementedSlaveServiceServer()
 }
 
@@ -366,6 +425,9 @@ func (UnimplementedSlaveServiceServer) GetStatus(context.Context, *StatusRequest
 }
 func (UnimplementedSlaveServiceServer) UpdateConfig(context.Context, *ConfigUpdate) (*UpdateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateConfig not implemented")
+}
+func (UnimplementedSlaveServiceServer) GetRequestDetails(context.Context, *DetailsRequest) (*DetailsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRequestDetails not implemented")
 }
 func (UnimplementedSlaveServiceServer) mustEmbedUnimplementedSlaveServiceServer() {}
 func (UnimplementedSlaveServiceServer) testEmbeddedByValue()                      {}
@@ -460,6 +522,24 @@ func _SlaveService_UpdateConfig_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SlaveService_GetRequestDetails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DetailsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SlaveServiceServer).GetRequestDetails(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SlaveService_GetRequestDetails_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SlaveServiceServer).GetRequestDetails(ctx, req.(*DetailsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SlaveService_ServiceDesc is the grpc.ServiceDesc for SlaveService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -482,6 +562,10 @@ var SlaveService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateConfig",
 			Handler:    _SlaveService_UpdateConfig_Handler,
+		},
+		{
+			MethodName: "GetRequestDetails",
+			Handler:    _SlaveService_GetRequestDetails_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

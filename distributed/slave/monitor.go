@@ -58,11 +58,11 @@ func (rm *ResourceMonitor) Start(ctx context.Context) {
 			// 定期更新资源使用情况
 			usage, err := rm.GetResourceUsage()
 			if err != nil {
-				rm.logger.ErrorContext(ctx, "Failed to get resource usage", map[string]interface{}{
+				rm.logger.ErrorContextKV(ctx, "Failed to get resource usage", map[string]interface{}{
 					"error": err.Error(),
 				})
 			} else {
-				rm.logger.DebugContext(ctx, "Resource usage updated", map[string]interface{}{
+				rm.logger.DebugContextKV(ctx, "Resource usage updated", map[string]interface{}{
 					"cpu_percent":    usage.CPUPercent,
 					"memory_percent": usage.MemoryPercent,
 					"active_tasks":   usage.ActiveTasks,

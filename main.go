@@ -60,12 +60,25 @@ var (
 	maxMemory string // 内存使用阈值
 
 	// 分布式参数
-	mode       types.RunMode // 运行模式: standalone/master/slave
-	masterAddr string        // Master 地址 (Slave 模式使用)
-	slaveID    string        // Slave ID (Slave 模式使用)
-	grpcPort   int           // gRPC 端口
-	httpPort   int           // HTTP 端口 (Master 模式使用)
-	region     string        // 节点区域标签
+	mode         types.RunMode // 运行模式: standalone/master/slave
+	masterAddr   string        // Master 地址 (Slave 模式使用)
+	slaveID      string        // Slave ID (Slave 模式使用)
+	grpcPort     int           // gRPC 端口
+	httpPort     int           // HTTP 端口 (Master 模式使用)
+	realtimePort int           // 实时报告端口 (Slave 模式使用)
+	region       string        // 节点区域标签
+
+	// Slave 数量计算配置 (Master 模式)
+	workersPerSlave int // 每个 Slave 承担的 Worker 数量
+	minSlaveCount   int // 最小需要的 Slave 数量
+
+	// Master 配置 (Master 模式)
+	heartbeatInterval time.Duration // 心跳间隔
+	heartbeatTimeout  time.Duration // 心跳超时
+	maxFailures       int           // 最大失败次数
+	tokenExpiration   time.Duration // Token 过期时间
+	tokenIssuer       string        // Token 签发者
+	masterSecret      string        // Master 密钥
 )
 
 // arrayFlags 数组flag
@@ -127,7 +140,20 @@ func init() {
 	flag.StringVar(&slaveID, "slave-id", "", "Slave节点ID (可选,不指定则自动生成)")
 	flag.IntVar(&grpcPort, "grpc-port", 9090, "gRPC服务端口")
 	flag.IntVar(&httpPort, "http-port", 8080, "HTTP服务端口 (Master模式)")
+	flag.IntVar(&realtimePort, "realtime-port", 0, "实时报告服务器端口 (Slave模式, 0表示自动分配)")
 	flag.StringVar(&region, "region", "default", "节点区域标签")
+
+	// Slave 数量计算配置 (Master 模式)
+	flag.IntVar(&workersPerSlave, "workers-per-slave", 100, "每个 Slave 承担的 Worker 数量 (默认100)")
+	flag.IntVar(&minSlaveCount, "min-slave-count", 1, "最小需要的 Slave 数量 (默认1)")
+
+	// Master 配置 (Master 模式)
+	flag.DurationVar(&heartbeatInterval, "heartbeat-interval", 5*time.Second, "心跳间隔 (默认5s)")
+	flag.DurationVar(&heartbeatTimeout, "heartbeat-timeout", 15*time.Second, "心跳超时 (默认15s)")
+	flag.IntVar(&maxFailures, "max-failures", 3, "最大失败次数 (默认3)")
+	flag.DurationVar(&tokenExpiration, "token-expiration", 24*time.Hour, "Token过期时间 (默认24h)")
+	flag.StringVar(&tokenIssuer, "token-issuer", "go-stress-master", "Token签发者")
+	flag.StringVar(&masterSecret, "master-secret", "go-stress-secret-key", "Master密钥")
 }
 
 func main() {
@@ -383,6 +409,9 @@ func printExamples() {
 		"# gRPC压测",
 		"go-stress -protocol grpc -url localhost:50051 -grpc-reflection -grpc-service myservice -grpc-method MyMethod -c 5 -n 50",
 		"",
+		"# WebSocket压测",
+		"go-stress -protocol websocket -url ws://localhost:8080/ws -body '{\"action\":\"ping\"}' -c 10 -n 100",
+		"",
 		"# 实时监控",
 		"运行后自动打开浏览器查看实时报告（默认端口: 8088，可通过配置文件的 realtime_port 修改）",
 		"测试完成后生成静态HTML报告: stress-report-{时间戳}.html",
@@ -589,17 +618,25 @@ func runMasterMode() {
 	hasTask := configFile != "" || curlFile != "" || url != ""
 
 	opts := bootstrap.MasterOptions{
-		GRPCPort:    grpcPort,
-		HTTPPort:    httpPort,
-		Logger:      logger.Default,
-		ConfigFile:  configFile,
-		CurlFile:    curlFile,
-		Concurrency: concurrency,
-		Requests:    requests,
-		URL:         url,
-		AutoSubmit:  hasTask, // 有任务配置时自动提交
-		WaitSlaves:  1,       // 至少等待 1 个 Slave
-		WaitTimeout: 30 * time.Second,
+		GRPCPort:          grpcPort,
+		HTTPPort:          httpPort,
+		Logger:            logger.Default,
+		ConfigFile:        configFile,
+		CurlFile:          curlFile,
+		Concurrency:       concurrency,
+		Requests:          requests,
+		URL:               url,
+		AutoSubmit:        hasTask, // 有任务配置时自动提交
+		WaitSlaves:        1,       // 至少等待 1 个 Slave
+		WaitTimeout:       30 * time.Second,
+		WorkersPerSlave:   workersPerSlave,   // 从命令行传入
+		MinSlaveCount:     minSlaveCount,     // 从命令行传入
+		HeartbeatInterval: heartbeatInterval, // 从命令行传入
+		HeartbeatTimeout:  heartbeatTimeout,  // 从命令行传入
+		MaxFailures:       maxFailures,       // 从命令行传入
+		TokenExpiration:   tokenExpiration,   // 从命令行传入
+		TokenIssuer:       tokenIssuer,       // 从命令行传入
+		Secret:            masterSecret,      // 从命令行传入
 	}
 
 	if err := bootstrap.RunMaster(opts); err != nil {
@@ -613,6 +650,7 @@ func runSlaveMode() {
 		SlaveID:        slaveID,
 		MasterAddr:     masterAddr,
 		GRPCPort:       grpcPort,
+		RealtimePort:   realtimePort,
 		Region:         region,
 		MaxConcurrency: 5,
 		CanReuse:       true,

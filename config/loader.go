@@ -39,33 +39,47 @@ func (l *Loader) LoadFromFile(path string) (*Config, error) {
 		return nil, fmt.Errorf("读取配置文件失败: %w", err)
 	}
 
+	// filepath.Ext 返回 ".yaml" / ".yml" / ".json"，去掉前缀点号
+	ext := filepath.Ext(path)
+	if len(ext) > 0 {
+		ext = ext[1:] // 去掉 "." 前缀，例如 ".yaml" -> "yaml"
+	}
+	return l.LoadFromBytes(data, ext)
+}
+
+// LoadFromBytes 从字节数据加载配置（支持 YAML 和 JSON）
+func (l *Loader) LoadFromBytes(data []byte, format string) (*Config, error) {
 	config := DefaultConfig()
 
-	ext := filepath.Ext(path)
-	switch ext {
-	case ".yaml", ".yml":
+	// 解析配置（支持 yaml/yml/json 格式）
+	switch format {
+	case "yaml", "yml":
 		if err := yaml.Unmarshal(data, config); err != nil {
 			return nil, fmt.Errorf("解析YAML配置失败: %w", err)
 		}
-	case ".json":
+	case "json":
 		if err := json.Unmarshal(data, config); err != nil {
 			return nil, fmt.Errorf("解析JSON配置失败: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("不支持的配置文件格式: %s", ext)
+		return nil, fmt.Errorf("不支持的配置格式: %s (仅支持yaml/yml/json)", format)
 	}
 
-	// 设置上下文
+	return l.processConfig(config)
+}
+
+// processConfig 处理配置（变量解析、API合并、验证）
+func (l *Loader) processConfig(config *Config) (*Config, error) {
+	// 设置变量解析器
 	l.varResolver.SetVariables(config.Variables)
-	// 注入变量解析器到 config
 	config.VarResolver = l.varResolver
 
-	// 处理多API配置继承
+	// 合并API配置
 	if err := l.mergeAPIsWithCommon(config); err != nil {
 		return nil, fmt.Errorf("合并API配置失败: %w", err)
 	}
 
-	// 调试输出：查看合并后的API配置
+	// 调试输出
 	if len(config.APIs) > 0 {
 		fmt.Printf("📋 配置了 %d 个API:\n", len(config.APIs))
 		for i, api := range config.APIs {

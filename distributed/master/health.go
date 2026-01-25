@@ -31,12 +31,12 @@ type HealthChecker struct {
 }
 
 // NewHealthChecker 创建健康检查器
-func NewHealthChecker(pool *SlavePool, log logger.ILogger) *HealthChecker {
+func NewHealthChecker(pool *SlavePool, interval, timeout time.Duration, maxFailures int, log logger.ILogger) *HealthChecker {
 	return &HealthChecker{
 		pool:         pool,
-		interval:     5 * time.Second,
-		timeout:      3 * time.Second,
-		maxFailures:  3,
+		interval:     interval,
+		timeout:      timeout,
+		maxFailures:  maxFailures,
 		failureCount: syncx.NewMap[string, int32](),
 		logger:       log,
 		taskManager:  syncx.NewPeriodicTaskManager(),
@@ -51,10 +51,10 @@ func (hc *HealthChecker) Start(ctx context.Context) {
 		return nil
 	}).
 		SetOnError(func(name string, err error) {
-			hc.logger.Error("Health check task error", "task", name, "error", err)
+			hc.logger.ErrorKV("Health check task error", "task", name, "error", err)
 		}).
 		SetOnStart(func(name string) {
-			hc.logger.Info("Health checker started", "interval", hc.interval)
+			hc.logger.InfoKV("Health checker started", "interval", hc.interval)
 		}).
 		SetOnStop(func(name string) {
 			hc.logger.Info("Health checker stopped")
@@ -94,13 +94,13 @@ func (hc *HealthChecker) handleFailure(slave *common.SlaveInfo) {
 	if int(count) >= hc.maxFailures {
 		// 标记为不健康
 		if err := hc.pool.MarkUnhealthy(slave.ID); err != nil {
-			hc.logger.Error("Failed to mark slave as unhealthy",
+			hc.logger.ErrorKV("Failed to mark slave as unhealthy",
 				"slave_id", slave.ID,
 				"error", err)
 			return
 		}
 
-		hc.logger.Warn("Slave marked as unhealthy",
+		hc.logger.WarnKV("Slave marked as unhealthy",
 			"slave_id", slave.ID,
 			"hostname", slave.Hostname,
 			"failures", count)
@@ -115,7 +115,7 @@ func (hc *HealthChecker) handleSuccess(slave *common.SlaveInfo) {
 
 		// 如果之前是不健康状态,恢复为健康
 		if err := hc.pool.MarkHealthy(slave.ID); err == nil {
-			hc.logger.Info("Slave recovered to healthy",
+			hc.logger.InfoKV("Slave recovered to healthy",
 				"slave_id", slave.ID,
 				"hostname", slave.Hostname)
 		}

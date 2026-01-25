@@ -71,9 +71,14 @@ func NewExecutorWithSQLiteStorage(cfg *config.Config, dbPath string) (*Executor,
 func newExecutor(cfg *config.Config, collector *statistics.Collector) (*Executor, error) {
 
 	// 设置运行模式
-	if cfg.RunMode != "" {
-		collector.SetRunMode(cfg.RunMode.String())
-	}
+	collector.SetRunMode(cfg.RunMode)
+
+	// 设置配置信息（用于报告显示）
+	collector.SetConfig(
+		string(cfg.Protocol),
+		cfg.Concurrency,
+		cfg.Requests,
+	)
 
 	// 1. 创建客户端工厂
 	clientFactory := createClientFactory(cfg)
@@ -134,13 +139,16 @@ func newExecutor(cfg *config.Config, collector *statistics.Collector) (*Executor
 // createClientFactory 创建客户端工厂
 func createClientFactory(cfg *config.Config) ClientFactory {
 	return func() (types.Client, error) {
+		logger.Default.Infof("创建客户端: protocol=%s (type=%T)", cfg.Protocol, cfg.Protocol)
 		switch cfg.Protocol {
 		case types.ProtocolHTTP:
 			return protocol.NewHTTPClient(cfg)
 		case types.ProtocolGRPC:
 			return protocol.NewGRPCClient(cfg)
+		case types.ProtocolWebSocket:
+			return protocol.NewWebSocketClient(cfg)
 		default:
-			return nil, fmt.Errorf("不支持的协议: %s", cfg.Protocol)
+			return nil, fmt.Errorf("不支持的协议: %s (type=%T, raw=%q)", cfg.Protocol, cfg.Protocol, string(cfg.Protocol))
 		}
 	}
 }
@@ -265,6 +273,15 @@ func (e *Executor) printStartInfo() {
 // GetCollector 获取统计收集器
 func (e *Executor) GetCollector() *statistics.Collector {
 	return e.collector
+}
+
+// ReplaceCollector 替换 Collector（用于分布式模式重用 Collector）
+func (e *Executor) ReplaceCollector(collector *statistics.Collector) {
+	e.collector = collector
+	// 更新 Scheduler 的 Collector
+	if e.scheduler != nil {
+		e.scheduler.collector = collector
+	}
 }
 
 // GetRealtimeServer 获取实时报告服务器

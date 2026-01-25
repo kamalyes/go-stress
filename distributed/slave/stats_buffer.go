@@ -13,6 +13,7 @@ package slave
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/kamalyes/go-logger"
@@ -147,17 +148,17 @@ func (sb *StatsBuffer) sendToMaster(stats *common.SlaveStats) error {
 
 	// 构建 proto 消息
 	statsData := &pb.StatsData{
-		SlaveId:       sb.slaveID,
-		TaskId:        sb.taskID,
-		Timestamp:     time.Now().Unix(),
-		TotalRequests: stats.TotalRequests,
-		SuccessCount:  stats.SuccessCount,
-		FailedCount:   stats.FailedCount,
-		AvgLatency:    stats.AvgLatency,
-		P95Latency:    stats.P95Latency,
-		P99Latency:    stats.P99Latency,
-		Qps:           stats.QPS,
-		StatusCodes:   statusCodes,
+		SlaveId:         sb.slaveID,
+		TaskId:          sb.taskID,
+		Timestamp:       time.Now().Unix(),
+		TotalRequests:   stats.TotalRequests,
+		SuccessRequests: stats.SuccessRequests,
+		FailedRequests:  stats.FailedRequests,
+		AvgLatency:      stats.AvgLatency,
+		P95Latency:      stats.P95Latency,
+		P99Latency:      stats.P99Latency,
+		Qps:             stats.QPS,
+		StatusCodes:     statusCodes,
 	}
 
 	// 发送数据
@@ -196,7 +197,9 @@ func (sb *StatsBuffer) CloseStream() error {
 func (sb *StatsBuffer) aggregate(results []*types.RequestResult) *common.SlaveStats {
 	stats := &common.SlaveStats{
 		SlaveID:     sb.slaveID,
+		TaskID:      sb.taskID,
 		StatusCodes: make(map[int]int64),
+		ErrorTypes:  make(map[string]int64),
 	}
 
 	if len(results) == 0 {
@@ -208,9 +211,13 @@ func (sb *StatsBuffer) aggregate(results []*types.RequestResult) *common.SlaveSt
 	for _, r := range results {
 		stats.TotalRequests++
 		if r.Success {
-			stats.SuccessCount++
+			stats.SuccessRequests++
 		} else {
-			stats.FailedCount++
+			stats.FailedRequests++
+			// 收集错误类型
+			if r.Error != nil {
+				stats.ErrorTypes[r.Error.Error()]++
+			}
 		}
 		latencies = append(latencies, float64(r.Duration.Milliseconds()))
 		stats.StatusCodes[r.StatusCode]++
@@ -218,13 +225,22 @@ func (sb *StatsBuffer) aggregate(results []*types.RequestResult) *common.SlaveSt
 
 	// 计算延迟统计
 	if len(latencies) > 0 {
+		sort.Float64s(latencies)
+		stats.MinLatency = latencies[0]
+		stats.MaxLatency = latencies[len(latencies)-1]
 		stats.AvgLatency = mathx.Mean(latencies)
+		stats.P50Latency = mathx.Percentile(latencies, 50)
+		stats.P90Latency = mathx.Percentile(latencies, 90)
 		stats.P95Latency = mathx.Percentile(latencies, 95)
 		stats.P99Latency = mathx.Percentile(latencies, 99)
 	}
 
-	// 计算 QPS (1秒窗口)
+	// 计算成功率和 QPS
+	if stats.TotalRequests > 0 {
+		stats.SuccessRate = float64(stats.SuccessRequests) / float64(stats.TotalRequests) * 100
+	}
 	stats.QPS = float64(stats.TotalRequests)
+	stats.TotalQPS = stats.QPS
 
 	return stats
 }

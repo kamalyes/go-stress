@@ -28,16 +28,16 @@ type DataAggregator struct {
 
 // TaskAggregation 任务聚合数据
 type TaskAggregation struct {
-	TaskID        string
-	StartTime     time.Time
-	LastUpdate    time.Time
-	SlaveStats    map[string]*common.SlaveStats
-	TotalRequests int64
-	TotalSuccess  int64
-	TotalFailed   int64
-	Latencies     []float64
-	StatusCodes   map[int]int64
-	ErrorTypes    map[string]int64
+	TaskID          string
+	StartTime       time.Time
+	LastUpdate      time.Time
+	SlaveStats      map[string]*common.SlaveStats
+	TotalRequests   int64
+	SuccessRequests int64
+	FailedRequests  int64
+	Latencies       []float64
+	StatusCodes     map[int]int64
+	ErrorTypes      map[string]int64
 }
 
 // NewDataAggregator 创建数据聚合器
@@ -74,8 +74,8 @@ func (da *DataAggregator) Add(stats *common.SlaveStats) {
 
 		// 聚合数据
 		agg.TotalRequests += stats.TotalRequests
-		agg.TotalSuccess += stats.SuccessCount
-		agg.TotalFailed += stats.FailedCount
+		agg.SuccessRequests += stats.SuccessRequests
+		agg.FailedRequests += stats.FailedRequests
 
 		// 聚合状态码
 		for code, count := range stats.StatusCodes {
@@ -109,20 +109,20 @@ func (da *DataAggregator) GetAllAggregations() map[string]*common.AggregatedStat
 // buildAggregatedStats 构建聚合统计
 func (da *DataAggregator) buildAggregatedStats(agg *TaskAggregation) *common.AggregatedStats {
 	stats := &common.AggregatedStats{
-		TaskID:        agg.TaskID,
-		TimeRange:     common.TimeRange{Start: agg.StartTime, End: agg.LastUpdate},
-		TotalAgents:   len(agg.SlaveStats),
-		TotalRequests: agg.TotalRequests,
-		TotalSuccess:  agg.TotalSuccess,
-		TotalFailed:   agg.TotalFailed,
-		BySlave:       agg.SlaveStats,
-		StatusCodes:   agg.StatusCodes,
-		ErrorTypes:    agg.ErrorTypes,
+		TaskID:          agg.TaskID,
+		TimeRange:       common.TimeRange{Start: agg.StartTime, End: agg.LastUpdate},
+		TotalAgents:     len(agg.SlaveStats),
+		TotalRequests:   agg.TotalRequests,
+		SuccessRequests: agg.SuccessRequests,
+		FailedRequests:  agg.FailedRequests,
+		BySlave:         agg.SlaveStats,
+		StatusCodes:     agg.StatusCodes,
+		ErrorTypes:      agg.ErrorTypes,
 	}
 
 	// 计算成功率
 	if stats.TotalRequests > 0 {
-		stats.SuccessRate = float64(stats.TotalSuccess) / float64(stats.TotalRequests) * 100
+		stats.SuccessRate = float64(stats.SuccessRequests) / float64(stats.TotalRequests) * 100
 	}
 
 	// 收集所有延迟数据
@@ -143,6 +143,7 @@ func (da *DataAggregator) buildAggregatedStats(agg *TaskAggregation) *common.Agg
 		stats.MaxLatency = latencies[len(latencies)-1]
 		stats.AvgLatency = mathx.Mean(latencies)
 		stats.P50Latency = mathx.Percentile(latencies, 50)
+		stats.P90Latency = mathx.Percentile(latencies, 90)
 		stats.P95Latency = mathx.Percentile(latencies, 95)
 		stats.P99Latency = mathx.Percentile(latencies, 99)
 	}
