@@ -305,7 +305,7 @@ function replayRequest(req, btnElement) {
     if (isCrossOrigin) {
       const message = 
         '⚠️ 跨域请求限制\n\n' +
-        '由于浏览器的 CORS 安全策略，无法直接重放跨域请求。\n\n' +
+        '由于浏览器的 CORS 安全策略，无法直接重放跨域请求\n\n' +
         '建议方案：\n' +
         '1. 使用"复制为"功能，选择合适的格式在终端或代码中执行\n' +
         '2. 使用 Postman 等 API 测试工具\n' +

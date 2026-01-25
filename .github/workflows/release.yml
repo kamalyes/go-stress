@@ -121,7 +121,7 @@ jobs:
             fi
             export PATH="$HOME/.cache/upx/upx-${{ env.UPX_VERSION }}-win64:$PATH"
           elif [[ "${{ matrix.goos }}" == "darwin" ]]; then
-            echo "UPX 官方已不再提供 macOS 预编译包，跳过 UPX 安装。"
+            echo "UPX 官方已不再提供 macOS 预编译包，跳过 UPX 安装"
           else
             if [ ! -d ~/.cache/upx/upx-${{ env.UPX_VERSION }}-amd64_linux ]; then
               curl -L -o upx.tar.xz "https://github.com/upx/upx/releases/download/v${{ env.UPX_VERSION }}/upx-${{ env.UPX_VERSION }}-amd64_linux.tar.xz"

@@ -42,7 +42,9 @@ func NewStatsBuffer(slaveID string, maxSize int, log logger.ILogger) *StatsBuffe
 	return &StatsBuffer{
 		slaveID:     slaveID,
 		buffer:      make([]*types.RequestResult, 0, maxSize),
+		bufferMu:    syncx.NewLock(),
 		maxSize:     maxSize,
+		streamMu:    syncx.NewLock(),
 		logger:      log,
 		taskManager: syncx.NewPeriodicTaskManager(),
 	}
@@ -121,6 +123,11 @@ func (sb *StatsBuffer) Flush() error {
 func (sb *StatsBuffer) sendToMaster(stats *common.SlaveStats) error {
 	sb.streamMu.Lock()
 	defer sb.streamMu.Unlock()
+
+	// 检查 masterClient 是否已设置
+	if sb.masterClient == nil {
+		return fmt.Errorf("master client not set")
+	}
 
 	// 如果流不存在，创建新的流
 	if sb.reportStream == nil {

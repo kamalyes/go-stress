@@ -50,7 +50,53 @@ type UpdateResponse struct {
 	Data    any    `json:"data"`
 }
 
-var tokens = make(map[string]string) // token -> userID
+// Ticket 相关结构
+type CreateTicketRequest struct {
+	UserID      string                 `json:"user_id"`
+	Subject     string                 `json:"subject"`
+	Description string                 `json:"description"`
+	Category    string                 `json:"category"`
+	Priority    int                    `json:"priority"`
+	Metadata    map[string]interface{} `json:"metadata"`
+}
+
+type Ticket struct {
+	TicketID  string `json:"ticket_id"`
+	UserID    string `json:"user_id"`
+	SessionID string `json:"session_id"`
+	AgentID   string `json:"agent_id"`
+	Status    string `json:"status"`
+	Subject   string `json:"subject"`
+}
+
+type CreateTicketResponse struct {
+	Ticket Ticket `json:"ticket"`
+}
+
+// Message 相关结构
+type SendMessageRequest struct {
+	SessionID    string                 `json:"session_id"`
+	SenderID     string                 `json:"sender_id"`
+	SenderType   int                    `json:"sender_type"`
+	ReceiverID   string                 `json:"receiver_id"`
+	ReceiverType int                    `json:"receiver_type"`
+	MsgType      int                    `json:"msg_type"`
+	Content      string                 `json:"content"`
+	ContentExtra map[string]interface{} `json:"content_extra"`
+	SeqNo        string                 `json:"seq_no"`
+	Priority     int                    `json:"priority"`
+	Metadata     map[string]interface{} `json:"metadata"`
+}
+
+type SendMessageResponse struct {
+	Data struct {
+		MessageID string `json:"message_id"`
+		Status    string `json:"status"`
+	} `json:"data"`
+}
+
+var tokens = make(map[string]string)   // token -> userID
+var sessions = make(map[string]string) // sessionID -> ticketID
 
 func main() {
 	http.HandleFunc("/api/login", handleLogin)
@@ -58,8 +104,12 @@ func main() {
 	http.HandleFunc("/api/user/update", handleUpdateUser)
 	http.HandleFunc("/api/health", handleHealth)
 
-	fmt.Println("🚀 测试服务器启动在 http://localhost:3000")
-	log.Fatal(http.ListenAndServe(":3000", nil))
+	// Ticket 和 Message 接口
+	http.HandleFunc("/v1/tickets", handleCreateTicket)
+	http.HandleFunc("/v1/messages/send", handleSendMessage)
+
+	fmt.Println("🚀 测试服务器启动在 http://localhost:8081")
+	log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -201,4 +251,81 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		"timestamp": time.Now().Unix(),
 		"service":   "test-api",
 	})
+}
+
+func handleCreateTicket(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CreateTicketRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("❌ JSON解析失败: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "无效的请求"})
+		return
+	}
+
+	// 生成 ticket 数据
+	ticketID := uuid.New().String()
+	sessionID := fmt.Sprintf("%x", uuid.New().ID())[:32]
+	agentID := "owner"
+
+	// 存储 session
+	sessions[sessionID] = ticketID
+
+	ticket := Ticket{
+		TicketID:  ticketID,
+		UserID:    req.UserID,
+		SessionID: sessionID,
+		AgentID:   agentID,
+		Status:    "open",
+		Subject:   req.Subject,
+	}
+
+	resp := CreateTicketResponse{
+		Ticket: ticket,
+	}
+
+	log.Printf("✅ 创建工单: ticketID=%s, sessionID=%s, userID=%s", ticketID, sessionID, req.UserID)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("❌ JSON解析失败: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "无效的请求"})
+		return
+	}
+
+	// 验证 session
+	ticketID, exists := sessions[req.SessionID]
+	if !exists {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "session不存在"})
+		return
+	}
+
+	// 生成消息 ID
+	messageID := uuid.New().String()
+
+	var resp SendMessageResponse
+	resp.Data.MessageID = messageID
+	resp.Data.Status = "sent"
+
+	log.Printf("✅ 发送消息: messageID=%s, sessionID=%s, ticketID=%s, content=%s",
+		messageID, req.SessionID, ticketID, req.Content)
+	json.NewEncoder(w).Encode(resp)
 }

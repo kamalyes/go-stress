@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-25 11:07:47
+ * @LastEditTime: 2026-01-25 11:57:55
  * @FilePath: \go-stress\main.go
  * @Description: 压测工具主入口
  *
@@ -11,23 +11,15 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"sort"
-	"strings"
-	"syscall"
 	"time"
 
+	"github.com/kamalyes/go-stress/bootstrap"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/executor"
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/types"
-	"github.com/kamalyes/go-toolbox/pkg/osx"
-	"github.com/kamalyes/go-toolbox/pkg/units"
 )
 
 var (
@@ -66,6 +58,14 @@ var (
 
 	// 内存限制
 	maxMemory string // 内存使用阈值
+
+	// 分布式参数
+	mode       types.RunMode // 运行模式: standalone/master/slave
+	masterAddr string        // Master 地址 (Slave 模式使用)
+	slaveID    string        // Slave ID (Slave 模式使用)
+	grpcPort   int           // gRPC 端口
+	httpPort   int           // HTTP 端口 (Master 模式使用)
+	region     string        // 节点区域标签
 )
 
 // arrayFlags 数组flag
@@ -80,15 +80,10 @@ func (a *arrayFlags) Set(value string) error {
 	return nil
 }
 
-// reportFile 报告文件信息
-type reportFile struct {
-	name    string
-	modTime time.Time
-}
-
 func init() {
 	// 设置默认值
 	storageMode = types.StorageModeMemory
+	mode = types.RunModeStandaloneCLI
 
 	// 基础参数
 	flag.StringVar(&configFile, "config", "", "配置文件路径 (yaml/json)")
@@ -125,6 +120,14 @@ func init() {
 
 	// 内存限制
 	flag.StringVar(&maxMemory, "max-memory", "", "内存使用阈值，超过后自动停止测试 (如: 1GB, 512MB, 2048KB)")
+
+	// 分布式参数
+	flag.Var(&mode, "mode", "运行模式 (standalone/master/slave)")
+	flag.StringVar(&masterAddr, "master", "", "Master节点地址 (Slave模式必需, 如: localhost:9090)")
+	flag.StringVar(&slaveID, "slave-id", "", "Slave节点ID (可选,不指定则自动生成)")
+	flag.IntVar(&grpcPort, "grpc-port", 9090, "gRPC服务端口")
+	flag.IntVar(&httpPort, "http-port", 8080, "HTTP服务端口 (Master模式)")
+	flag.StringVar(&region, "region", "default", "节点区域标签")
 }
 
 func main() {
@@ -133,296 +136,45 @@ func main() {
 	// 初始化日志器
 	initLogger()
 
-	// 如果没有任何参数，显示帮助信息
+	// 处理子命令
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "help", "-h", "--help":
+			printBanner()
+			printSimpleUsage()
+			os.Exit(0)
+		case "variables", "vars", "-vars":
+			printBanner()
+			printVariablesHelp()
+			os.Exit(0)
+		case "examples", "demo", "-demo":
+			printBanner()
+			printExamplesHelp()
+			os.Exit(0)
+		case "version", "-v", "--version":
+			printVersion()
+			os.Exit(0)
+		}
+	}
+
+	// 如果没有任何参数，显示简化帮助信息
 	if len(os.Args) == 1 {
 		printBanner()
-		printUsage()
+		printSimpleUsage()
 		os.Exit(0)
 	}
 
 	// 打印banner
 	printBanner()
 
-	var cfg *config.Config
-	var err error
-
-	// 从curl文件加载
-	if curlFile != "" {
-		logger.Default.Info("📄 解析curl文件: %s", curlFile)
-		cfg, err = config.ParseCurlFile(curlFile)
-		if err != nil {
-			logger.Default.Fatalf("❌ 解析curl文件失败: %v", err)
-		}
-		// 如果命令行指定了并发数和请求数，覆盖curl配置
-		if concurrency > 0 {
-			cfg.Concurrency = concurrency
-		}
-		if requests > 0 {
-			cfg.Requests = requests
-		}
-		if timeout > 0 {
-			cfg.Timeout = timeout
-		}
-	} else if configFile != "" {
-		// 从配置文件加载
-		logger.Default.Info("📄 加载配置文件: %s", configFile)
-		loader := config.NewLoader()
-		cfg, err = loader.LoadFromFile(configFile)
-		if err != nil {
-			logger.Default.Fatalf("❌ 加载配置文件失败: %v", err)
-		}
-		// 设置运行模式为配置文件模式
-		cfg.RunMode = types.RunModeConfig
-	} else {
-		// 使用命令行参数
-		cfg = buildConfigFromFlags()
-		cfg.RunMode = types.RunModeCLI
-	}
-
-	// 验证配置
-	if err := validateConfig(cfg); err != nil {
-		logger.Default.Errorf("❌ 配置验证失败: %v\n", err)
-		printUsage()
-		os.Exit(1)
-	}
-
-	// 创建执行器（根据存储模式选择）
-	var exec *executor.Executor
-
-	switch storageMode {
-	case types.StorageModeMemory:
-		// 内存模式：高速、无限制、不持久化
-		logger.Default.Info("💾 存储模式: 内存 (高速、无限制、不持久化)")
-		exec, err = executor.NewExecutorWithMemoryStorage(cfg)
-
-	case types.StorageModeSQLite:
-		// SQLite 模式：持久化、无限制、可查询
-		reportDir := filepath.Join(reportPrefix, fmt.Sprintf("%d", time.Now().Unix()))
-		if err := os.MkdirAll(reportDir, os.ModePerm); err != nil {
-			logger.Default.Fatalf("❌ 创建报告目录失败: %v", err)
-		}
-		dbPath := filepath.Join(reportDir, "details.db")
-		logger.Default.Info("💾 存储模式: SQLite (持久化、无限制、可查询)")
-		logger.Default.Info("💾 数据库路径: %s", dbPath)
-		exec, err = executor.NewExecutorWithSQLiteStorage(cfg, dbPath)
-
+	// 根据运行模式选择执行路径
+	switch mode {
+	case types.RunModeMaster:
+		runMasterMode()
+	case types.RunModeSlave:
+		runSlaveMode()
 	default:
-		logger.Default.Fatalf("❌ 未知的存储模式: %s (支持: %s, %s)",
-			storageMode, types.StorageModeMemory, types.StorageModeSQLite)
-	}
-
-	if err != nil {
-		logger.Default.Fatalf("❌ 创建执行器失败: %v", err)
-	}
-
-	// 创建context，支持Ctrl+C中断
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 确保程序退出前关闭实时报告服务器
-	defer func() {
-		if exec.GetRealtimeServer() != nil {
-			logger.Default.Debug("🔒 正在关闭实时报告服务器...")
-			if err := exec.GetRealtimeServer().Stop(); err != nil {
-				logger.Default.Warnf("⚠️  关闭实时报告服务器失败: %v", err)
-			}
-		}
-	}()
-
-	// 监听信号
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigCh
-		logger.Default.Warn("\n\n⚠️  收到中断信号，正在停止...")
-		cancel()
-	}()
-
-	// 启动内存监控（如果配置了阈值）
-	if maxMemory != "" {
-		threshold, err := units.ParseBytes(maxMemory)
-		if err != nil {
-			logger.Default.Warnf("⚠️  内存阈值格式错误: %v,将忽略内存监控", err)
-		} else {
-			logger.Default.Infof("🔍 启动内存监控，阈值: %s (%d MB)", maxMemory, threshold/(1024*1024))
-
-			// 使用高级内存监控器
-			monitor := osx.NewAdvancedMonitor().
-				AddThreshold(osx.LevelWarning, threshold*80/100). // 80% 警告
-				AddThreshold(osx.LevelCritical, threshold).       // 100% 严重
-				SetMetricType(osx.MetricAlloc).
-				SetCheckOnce(false).
-				SetMaxHistory(200).
-				EnableGrowthCheck(20.0, 30*time.Second). // 30秒内增长超过20%告警
-				OnWarning(func(snapshot osx.Snapshot) {
-					logger.Default.Warnf("[⚠️  警告] 内存使用: %s / %s (%.1f%%), Goroutines: %d",
-						units.FormatBytes(snapshot.Alloc),
-						maxMemory,
-						float64(snapshot.Alloc)/float64(threshold)*100,
-						snapshot.Goroutines)
-				}).
-				OnCritical(func(snapshot osx.Snapshot) {
-					logger.Default.Warnf("\n[🚨 严重] 内存使用超过阈值: %s / %s (%.1f%%)",
-						units.FormatBytes(snapshot.Alloc),
-						maxMemory,
-						float64(snapshot.Alloc)/float64(threshold)*100)
-					logger.Default.Warnf("  GC次数: %d, Goroutines: %d", snapshot.NumGC, snapshot.Goroutines)
-					logger.Default.Warn("🛑 自动停止测试任务...")
-					cancel()
-				}).
-				OnGrowthAlert(func(rate osx.GrowthRate, snapshot osx.Snapshot) {
-					logger.Default.Warnf("[📈 增长告警] 增长率: %.2f%%, 绝对增长: %s, 时间窗口: %v",
-						rate.Percentage,
-						units.FormatBytes(uint64(rate.Absolute)),
-						rate.Duration)
-				}).
-				OnCheck(func(snapshot osx.Snapshot) {
-					logger.Default.Debugf("📊 内存监控 - Alloc: %s, Sys: %s, Goroutines: %d, GC: %d",
-						units.FormatBytes(snapshot.Alloc),
-						units.FormatBytes(snapshot.Sys),
-						snapshot.Goroutines,
-						snapshot.NumGC)
-				})
-
-			go monitor.Start(ctx, 5*time.Second)
-		}
-	}
-
-	// 执行压测
-	report, err := exec.Run(ctx)
-	if err != nil {
-		// 如果是用户中断（context canceled），不视为错误
-		if err.Error() == "执行压测失败: context canceled" ||
-			strings.Contains(err.Error(), "context canceled") {
-			logger.Default.Warn("⚠️  用户已中断压测")
-			// 继续执行后续的报告生成和数据保存
-		} else {
-			// 其他错误直接退出
-			logger.Default.Fatalf("❌ 压测执行失败: %v", err)
-		}
-	}
-
-	// 打印报告
-	if report != nil {
-		report.Print()
-	}
-
-	// 清理旧报告（保留最近50个）
-	cleanOldReports(50)
-
-	// 创建报告目录
-	reportDir := filepath.Join(reportPrefix, fmt.Sprintf("%d", time.Now().Unix()))
-
-	if err := os.MkdirAll(reportDir, os.ModePerm); err != nil {
-		logger.Default.Warnf("⚠️  创建报告目录失败: %v", err)
-		// 即使创建目录失败，也要关闭存储
-		if err := exec.GetCollector().Close(); err != nil {
-			logger.Default.Warnf("⚠️  关闭存储失败: %v", err)
-		}
-		return
-	}
-
-	// 生成并保存HTML报告（会自动生成配套的 JSON 文件）
-	htmlReportFile := filepath.Join(reportDir, "index.html")
-	totalDuration := time.Duration(0)
-	if report != nil {
-		totalDuration = report.TotalTime
-	}
-	if err := exec.GetCollector().GenerateHTMLReport(totalDuration, htmlReportFile); err != nil {
-		logger.Default.Warnf("⚠️  生成HTML报告失败: %v", err)
-	} else {
-		logger.Default.Info("🌐 在浏览器中打开查看详细图表: file:///%s", htmlReportFile)
-	}
-
-	// 确保所有数据都写入存储
-	if err := exec.GetCollector().Close(); err != nil {
-		logger.Default.Warnf("⚠️  关闭存储失败: %v", err)
-	}
-
-	// 获取实时报告服务器端口
-	realtimePort := 8088 // 默认端口
-	if realtimeServer := exec.GetRealtimeServer(); realtimeServer != nil {
-		realtimePort = realtimeServer.GetPort()
-	}
-
-	// 等待用户查看报告后手动退出
-	logger.Default.Info("\n💡 提示: 实时报告服务器仍在运行")
-	logger.Default.Info("   访问 http://localhost:%d 查看实时报告", realtimePort)
-	logger.Default.Info("   按 Ctrl+C 退出程序")
-
-	// 等待退出信号
-	select {
-	case <-sigCh:
-		logger.Default.Info("\n👋 程序已退出")
-	case <-ctx.Done():
-		logger.Default.Info("\n👋 程序已退出")
-	}
-}
-
-// cleanOldReports 清理旧的报告文件，保留最近的N个
-func cleanOldReports(keepCount int) {
-	// 获取所有报告文件
-	files, err := os.ReadDir(".")
-	if err != nil {
-		return
-	}
-
-	var jsonReports []reportFile
-	var htmlReports []reportFile
-
-	// 收集所有报告文件
-	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
-		name := file.Name()
-		// 匹配报告文件（使用配置的前缀）
-		prefix := reportPrefix + "-"
-		if strings.HasPrefix(name, prefix) {
-			info, err := file.Info()
-			if err != nil {
-				continue
-			}
-
-			rf := reportFile{
-				name:    name,
-				modTime: info.ModTime(),
-			}
-
-			if strings.HasSuffix(name, ".json") {
-				jsonReports = append(jsonReports, rf)
-			} else if strings.HasSuffix(name, ".html") {
-				htmlReports = append(htmlReports, rf)
-			}
-		}
-	}
-
-	// 清理JSON报告
-	cleanReportFiles(jsonReports, keepCount)
-	// 清理HTML报告
-	cleanReportFiles(htmlReports, keepCount)
-}
-
-// cleanReportFiles 清理指定类型的报告文件
-func cleanReportFiles(files []reportFile, keepCount int) {
-	if len(files) <= keepCount {
-		return
-	}
-
-	// 按修改时间排序（新的在前）
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].modTime.After(files[j].modTime)
-	})
-
-	// 删除超出保留数量的文件
-	for i := keepCount; i < len(files); i++ {
-		if err := os.Remove(files[i].name); err != nil {
-			logger.Default.Debugf("删除旧报告失败: %s, %v", files[i].name, err)
-		} else {
-			logger.Default.Debugf("🗑️  已删除旧报告: %s", files[i].name)
-		}
+		runStandaloneMode()
 	}
 }
 
@@ -467,58 +219,22 @@ func buildConfigFromFlags() *config.Config {
 	return cfg
 }
 
-// validateConfig 验证配置
-func validateConfig(cfg *config.Config) error {
-	// 多API模式下，URL已经在config.Loader中验证过了
-	if len(cfg.APIs) == 0 {
-		// 单API模式才检查URL
-		if cfg.URL == "" {
-			return fmt.Errorf("URL不能为空")
-		}
-	}
-
-	if cfg.Concurrency == 0 {
-		return fmt.Errorf("并发数不能为0")
-	}
-
-	if cfg.Requests == 0 {
-		return fmt.Errorf("请求数不能为0")
-	}
-
-	// gRPC特定验证
-	if cfg.Protocol == types.ProtocolGRPC {
-		if cfg.GRPC == nil {
-			return fmt.Errorf("gRPC配置不能为空")
-		}
-		if cfg.GRPC.UseReflection {
-			if cfg.GRPC.Service == "" {
-				return fmt.Errorf("gRPC服务名不能为空")
-			}
-			if cfg.GRPC.Method == "" {
-				return fmt.Errorf("gRPC方法名不能为空")
-			}
-		}
-	}
-
-	return nil
-}
-
 // initLogger 初始化日志器
 func initLogger() {
 	config := logger.DefaultConfig()
 
 	// 优先级：verbose > quiet > logLevel
-	if verbose {
+	switch {
+	case verbose:
 		config = config.WithLevel(logger.DEBUG).WithShowCaller(true).WithTimeFormat("2006-01-02 15:04:05.000")
-	} else if quiet {
+	case quiet:
 		config = config.WithLevel(logger.ERROR)
-	} else {
+	default:
 		config = config.WithLevel(logger.ParseLogLevel(logLevel))
 	}
 
 	// 配置输出
 	if logFile != "" {
-		// 使用轮转文件日志（最大100MB，保留5个备份）
 		rotateWriter := logger.NewRotateWriter(logFile, 100*1024*1024, 5)
 		config = config.WithOutput(rotateWriter).WithColorful(false)
 	}
@@ -557,24 +273,90 @@ func printBanner() {
 `)
 }
 
-// printUsage 打印使用说明
-func printUsage() {
-	resolver := config.NewVariableResolver()
+// printVersion 打印版本信息
+func printVersion() {
+	fmt.Println("go-stress version 1.0.0")
+	fmt.Println("高性能 HTTP/gRPC/WebSocket 压测工具")
+}
 
+// printSimpleUsage 打印简化的使用说明
+func printSimpleUsage() {
 	printHeader("使用方法:")
 	flag.Usage()
 
+	fmt.Println("\n常用子命令:")
+	fmt.Println("  go-stress help          - 显示完整帮助信息")
+	fmt.Println("  go-stress variables     - 显示所有可用变量函数")
+	fmt.Println("  go-stress examples      - 显示详细使用示例")
+	fmt.Println("  go-stress version       - 显示版本信息")
+
+	fmt.Println("\n快速开始:")
+	fmt.Println("  # HTTP压测")
+	fmt.Println("  go-stress -url https://example.com -c 10 -n 100")
+	fmt.Println("")
+	fmt.Println("  # 使用配置文件")
+	fmt.Println("  go-stress -config config.yaml")
+	fmt.Println("")
+	fmt.Println("  # Master模式（分布式）")
+	fmt.Println("  go-stress -mode master -config config.yaml")
+	fmt.Println("")
+	fmt.Println("  # Slave模式")
+	fmt.Println("  go-stress -mode slave -master localhost:9090")
+
+	fmt.Println("\n💡 提示: 使用 'go-stress variables' 查看所有参数化变量")
+	fmt.Println("💡 提示: 使用 'go-stress examples' 查看详细示例")
+}
+
+// printVariablesHelp 打印变量功能帮助
+func printVariablesHelp() {
+	resolver := config.NewVariableResolver()
+
+	printHeader("变量功能说明:")
+	fmt.Println("  支持在 URL、请求体、请求头中使用变量，使用 {{variable}} 或 {{function}} 语法")
+	fmt.Println("")
+
+	printHeader("基本用法:")
+	printVariableExamples(resolver)
+
+	printHeader("所有可用变量函数:")
+	printAvailableFunctions(resolver)
+
+	fmt.Println("\n💡 详细文档: docs/VARIABLES.md")
+}
+
+// printExamplesHelp 打印示例帮助
+func printExamplesHelp() {
 	printHeader("基本示例:")
 	printExamples()
 
-	printHeader("变量功能:")
-	printVariableExamples(resolver)
-
-	printHeader("可用变量函数:")
-	printAvailableFunctions(resolver)
-
 	printHeader("配置文件示例 (config.yaml):")
 	printConfigExample()
+
+	fmt.Println("\n更多示例:")
+	fmt.Println("  # 使用变量")
+	fmt.Println("  go-stress -url 'https://api.example.com/user/{{seq}}' -c 10 -n 100")
+	fmt.Println("")
+	fmt.Println("  # 自定义请求头")
+	fmt.Println("  go-stress -url https://api.example.com -H 'Authorization: Bearer token' -H 'X-Request-ID: {{randomUUID}}'")
+	fmt.Println("")
+	fmt.Println("  # 内存限制")
+	fmt.Println("  go-stress -config config.yaml -max-memory 1GB")
+	fmt.Println("")
+	fmt.Println("  # 持久化存储")
+	fmt.Println("  go-stress -config config.yaml -storage sqlite")
+	fmt.Println("")
+	fmt.Println("  # 分布式压测 (Master)")
+	fmt.Println("  go-stress -mode master -http-port 8080 -grpc-port 9090 -config config.yaml")
+	fmt.Println("")
+	fmt.Println("  # 分布式压测 (Slave)")
+	fmt.Println("  go-stress -mode slave -master localhost:9090 -region us-west")
+
+	fmt.Println("\n💡 完整文档:")
+	fmt.Println("  - 快速开始: docs/GETTING_STARTED.md")
+	fmt.Println("  - 配置文件: docs/CONFIG_FILE.md")
+	fmt.Println("  - 命令参考: docs/CLI_REFERENCE.md")
+	fmt.Println("  - 分布式模式: docs/DISTRIBUTED_MODE.md")
+	fmt.Println("  - 变量函数: docs/VARIABLES.md")
 }
 
 func printHeader(title string) {
@@ -648,43 +430,134 @@ func printEnvironmentExamples(resolver *config.VariableResolver) {
 }
 
 func printAvailableFunctions(resolver *config.VariableResolver) {
+	// 生成示例
 	seqExample, _ := resolver.Resolve("{{seq}}")
 	unixExample, _ := resolver.Resolve("{{unix}}")
 	unixNano, _ := resolver.Resolve("{{unixNano}}")
 	timestamp, _ := resolver.Resolve("{{timestamp}}")
+	dateEx, _ := resolver.Resolve("{{date \"2006-01-02\"}}")
+
 	randomInt, _ := resolver.Resolve("{{randomInt 1 100}}")
 	randomFloat, _ := resolver.Resolve("{{randomFloat 0.0 1.0}}")
 	randomStr, _ := resolver.Resolve("{{randomString 10}}")
+	randomAlpha, _ := resolver.Resolve("{{randomAlpha 8}}")
+	randomNum, _ := resolver.Resolve("{{randomNumber 6}}")
+	uuidEx, _ := resolver.Resolve("{{randomUUID}}")
+
+	emailEx, _ := resolver.Resolve("{{randomEmail}}")
+	phoneEx, _ := resolver.Resolve("{{randomPhone}}")
+	ipEx, _ := resolver.Resolve("{{randomIP}}")
+	macEx, _ := resolver.Resolve("{{randomMAC}}")
+
+	nameEx, _ := resolver.Resolve("{{randomName}}")
+	cityEx, _ := resolver.Resolve("{{randomCity}}")
+	countryEx, _ := resolver.Resolve("{{randomCountry}}")
+	dateRandEx, _ := resolver.Resolve("{{randomDate}}")
+	timeEx, _ := resolver.Resolve("{{randomTime}}")
+	priceEx, _ := resolver.Resolve("{{randomPrice 10 100}}")
+
 	hostname, _ := resolver.Resolve("{{hostname}}")
 	localIP, _ := resolver.Resolve("{{localIP}}")
+
 	md5Ex, _ := resolver.Resolve("{{md5 \"test\"}}")
 	sha1Ex, _ := resolver.Resolve("{{sha1 \"test\"}}")
+	sha256Ex, _ := resolver.Resolve("{{sha256 \"test\"}}")
+
 	base64Ex, _ := resolver.Resolve("{{base64 \"hello\"}}")
 	urlEncodeEx, _ := resolver.Resolve("{{urlEncode \"a b c\"}}")
 
-	fmt.Println("  环境变量:")
+	upperEx, _ := resolver.Resolve("{{upper \"hello\"}}")
+	lowerEx, _ := resolver.Resolve("{{lower \"HELLO\"}}")
+	trimEx, _ := resolver.Resolve("{{trim \" hi \"}}")
+	replaceEx, _ := resolver.Resolve("{{replace \"hello\" \"l\" \"L\"}}")
+	substrEx, _ := resolver.Resolve("{{substr \"hello\" 0 2}}")
+
+	addEx, _ := resolver.Resolve("{{add 1 2}}")
+	subMathEx, _ := resolver.Resolve("{{sub 5 2}}")
+	mulEx, _ := resolver.Resolve("{{mul 3 4}}")
+	divEx, _ := resolver.Resolve("{{div 10 2}}")
+	maxEx, _ := resolver.Resolve("{{max 5 10}}")
+	minEx, _ := resolver.Resolve("{{min 5 10}}")
+
+	printEx, _ := resolver.Resolve("{{print \"a\" \"b\" \"c\"}}")
+	combineEx, _ := resolver.Resolve("{{md5 (print (seq) (unix))}}")
+
+	base64DecEx, _ := resolver.Resolve("{{base64Decode \"aGVsbG8=\"}}")
+	urlDecEx, _ := resolver.Resolve("{{urlDecode \"a+b+c\"}}")
+	hexEncEx, _ := resolver.Resolve("{{hexEncode \"hello\"}}")
+	hexDecEx, _ := resolver.Resolve("{{hexDecode \"68656c6c6f\"}}")
+	idCardEx, _ := resolver.Resolve("{{randomIDCard}}")
+	boolEx, _ := resolver.Resolve("{{randomBool}}")
+
+	fmt.Println("  环境变量 & 主机:")
 	fmt.Println("    {{env \"VAR_NAME\"}}           - 获取环境变量")
 	fmt.Printf("    {{hostname}}                  - 主机名 (示例: %s)\n", hostname)
 	fmt.Printf("    {{localIP}}                   - 本机IP (示例: %s)\n", localIP)
 
-	fmt.Println("  序列号:")
+	fmt.Println("\n  序列 & 时间:")
 	fmt.Printf("    {{seq}}                       - 自增序列号 (示例: %s)\n", seqExample)
-
-	fmt.Println("  时间函数:")
 	fmt.Printf("    {{unix}}                      - Unix时间戳/秒 (示例: %s)\n", unixExample)
 	fmt.Printf("    {{unixNano}}                  - Unix纳秒时间戳 (示例: %s)\n", unixNano)
 	fmt.Printf("    {{timestamp}}                 - Unix毫秒时间戳 (示例: %s)\n", timestamp)
+	fmt.Printf("    {{date \"2006-01-02\"}}         - 格式化日期 (示例: %s)\n", dateEx)
 
-	fmt.Println("  随机函数:")
+	fmt.Println("\n  随机-基础:")
 	fmt.Printf("    {{randomInt 1 100}}           - 随机整数 (示例: %s)\n", randomInt)
 	fmt.Printf("    {{randomFloat 0.0 1.0}}       - 随机浮点数 (示例: %s)\n", randomFloat)
 	fmt.Printf("    {{randomString 10}}           - 随机字符串 (示例: %s)\n", randomStr)
+	fmt.Printf("    {{randomAlpha 8}}             - 随机字母 (示例: %s)\n", randomAlpha)
+	fmt.Printf("    {{randomNumber 6}}            - 随机数字 (示例: %s)\n", randomNum)
+	fmt.Printf("    {{randomUUID}}                - UUID (示例: %s)\n", uuidEx)
+	fmt.Printf("    {{randomBool}}                - 随机布尔值 (示例: %s)\n", boolEx)
 
-	fmt.Println("  加密/编码:")
+	fmt.Println("\n  随机-格式化:")
+	fmt.Printf("    {{randomEmail}}               - 随机邮箱 (示例: %s)\n", emailEx)
+	fmt.Printf("    {{randomPhone}}               - 随机手机号 (示例: %s)\n", phoneEx)
+	fmt.Printf("    {{randomIP}}                  - 随机IP地址 (示例: %s)\n", ipEx)
+	fmt.Printf("    {{randomMAC}}                 - 随机MAC地址 (示例: %s)\n", macEx)
+
+	fmt.Println("\n  随机-业务场景:")
+	fmt.Printf("    {{randomName}}                - 随机姓名 (示例: %s)\n", nameEx)
+	fmt.Printf("    {{randomCity}}                - 随机城市 (示例: %s)\n", cityEx)
+	fmt.Printf("    {{randomCountry}}             - 随机国家 (示例: %s)\n", countryEx)
+	fmt.Printf("    {{randomDate}}                - 随机日期 (示例: %s)\n", dateRandEx)
+	fmt.Printf("    {{randomTime}}                - 随机时间 (示例: %s)\n", timeEx)
+	fmt.Printf("    {{randomPrice 10 100}}        - 随机价格 (示例: %s)\n", priceEx)
+	fmt.Printf("    {{randomIDCard}}              - 随机身份证号 (示例: %s)\n", idCardEx)
+
+	fmt.Println("\n  加密/哈希:")
 	fmt.Printf("    {{md5 \"text\"}}               - MD5 (示例: %s)\n", md5Ex)
 	fmt.Printf("    {{sha1 \"text\"}}              - SHA1 (示例: %s...)\n", sha1Ex[:16])
-	fmt.Printf("    {{base64 \"text\"}}            - Base64 (示例: %s)\n", base64Ex)
-	fmt.Printf("    {{urlEncode \"a b\"}}          - URL编码 (示例: %s)\n", urlEncodeEx)
+	fmt.Printf("    {{sha256 \"text\"}}            - SHA256 (示例: %s...)\n", sha256Ex[:16])
+
+	fmt.Println("\n  编码/解码:")
+	fmt.Printf("    {{base64 \"hello\"}}           - Base64编码 (示例: %s)\n", base64Ex)
+	fmt.Printf("    {{base64Decode \"aGVsbG8=\"}}  - Base64解码 (示例: %s)\n", base64DecEx)
+	fmt.Printf("    {{urlEncode \"a b c\"}}        - URL编码 (示例: %s)\n", urlEncodeEx)
+	fmt.Printf("    {{urlDecode \"a+b+c\"}}        - URL解码 (示例: %s)\n", urlDecEx)
+	fmt.Printf("    {{hexEncode \"hello\"}}        - 十六进制编码 (示例: %s)\n", hexEncEx)
+	fmt.Printf("    {{hexDecode \"68656c6c6f\"}}   - 十六进制解码 (示例: %s)\n", hexDecEx)
+
+	fmt.Println("\n  字符串操作:")
+	fmt.Printf("    {{upper \"hello\"}}            - 转大写 (示例: %s)\n", upperEx)
+	fmt.Printf("    {{lower \"HELLO\"}}            - 转小写 (示例: %s)\n", lowerEx)
+	fmt.Printf("    {{trim \" hi \"}}              - 去除空格 (示例: %s)\n", trimEx)
+	fmt.Printf("    {{replace \"hello\" \"l\" \"L\"}} - 字符串替换 (示例: %s)\n", replaceEx)
+	fmt.Printf("    {{substr \"hello\" 0 2}}       - 截取子串 (示例: %s)\n", substrEx)
+
+	fmt.Println("\n  数学运算:")
+	fmt.Printf("    {{add 1 2}}                   - 加法 (示例: %s)\n", addEx)
+	fmt.Printf("    {{sub 5 2}}                   - 减法 (示例: %s)\n", subMathEx)
+	fmt.Printf("    {{mul 3 4}}                   - 乘法 (示例: %s)\n", mulEx)
+	fmt.Printf("    {{div 10 2}}                  - 除法 (示例: %s)\n", divEx)
+	fmt.Printf("    {{max 5 10}}                  - 最大值 (示例: %s)\n", maxEx)
+	fmt.Printf("    {{min 5 10}}                  - 最小值 (示例: %s)\n", minEx)
+
+	fmt.Println("\n  组合函数:")
+	fmt.Printf("    {{print \"a\" \"b\" \"c\"}}       - 拼接字符串 (示例: %s)\n", printEx)
+	fmt.Printf("    {{md5 (print (seq) (unix))}}  - 组合使用 (示例: %s)\n", combineEx)
+
+	fmt.Println("\n  💡 更多函数请参考文档: docs/VARIABLES.md")
 }
 
 func printConfigExample() {
@@ -708,4 +581,63 @@ func printConfigExample() {
 	fmt.Println("    \"client_ip\": \"{{randomIP}}\",")
 	fmt.Println("    \"token\": \"{{base64 (randomString 16)}}\"")
 	fmt.Println("  }")
+}
+
+// runMasterMode 运行 Master 模式
+func runMasterMode() {
+	// 判断是否有任务配置
+	hasTask := configFile != "" || curlFile != "" || url != ""
+
+	opts := bootstrap.MasterOptions{
+		GRPCPort:    grpcPort,
+		HTTPPort:    httpPort,
+		Logger:      logger.Default,
+		ConfigFile:  configFile,
+		CurlFile:    curlFile,
+		Concurrency: concurrency,
+		Requests:    requests,
+		URL:         url,
+		AutoSubmit:  hasTask, // 有任务配置时自动提交
+		WaitSlaves:  1,       // 至少等待 1 个 Slave
+		WaitTimeout: 30 * time.Second,
+	}
+
+	if err := bootstrap.RunMaster(opts); err != nil {
+		logger.Default.Fatalf("❌ 运行 Master 失败: %v", err)
+	}
+}
+
+// runSlaveMode 运行 Slave 模式
+func runSlaveMode() {
+	opts := bootstrap.SlaveOptions{
+		SlaveID:        slaveID,
+		MasterAddr:     masterAddr,
+		GRPCPort:       grpcPort,
+		Region:         region,
+		MaxConcurrency: 5,
+		CanReuse:       true,
+		Logger:         logger.Default,
+	}
+	if err := bootstrap.RunSlave(opts); err != nil {
+		logger.Default.Fatalf("❌ 运行 Slave 失败: %v", err)
+	}
+}
+
+// runStandaloneMode 运行独立模式
+func runStandaloneMode() {
+	opts := bootstrap.StandaloneOptions{
+		ConfigFile:   configFile,
+		CurlFile:     curlFile,
+		Concurrency:  concurrency,
+		Requests:     requests,
+		Timeout:      timeout,
+		StorageMode:  storageMode,
+		ReportPrefix: reportPrefix,
+		MaxMemory:    maxMemory,
+		Logger:       logger.Default,
+		ConfigFunc:   buildConfigFromFlags,
+	}
+	if err := bootstrap.RunStandalone(opts); err != nil {
+		logger.Default.Fatalf("❌ 运行 Standalone 失败: %v", err)
+	}
 }

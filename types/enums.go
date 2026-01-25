@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-23 00:00:00
+ * @LastEditTime: 2026-01-25 12:12:39
  * @FilePath: \go-stress\types\enums.go
  * @Description: 枚举类型定义
  *
@@ -50,13 +50,22 @@ const (
 type RunMode string
 
 const (
-	RunModeCLI    RunMode = "cli"    // 命令行模式
-	RunModeConfig RunMode = "config" // 配置文件模式
+	RunModeMaster        RunMode = "master"
+	RunModeSlave         RunMode = "slave"
+	RunModeStandaloneCLI RunMode = "cli" // 独立模式
 )
 
-// String 返回运行模式的字符串表示
-func (r RunMode) String() string {
-	return string(r)
+// RunMode 实现 flag.Value 接口
+func (s *RunMode) String() string {
+	if s == nil {
+		return string(RunModeStandaloneCLI)
+	}
+	return string(*s)
+}
+
+func (s *RunMode) Set(value string) error {
+	*s = RunMode(value)
+	return nil
 }
 
 // VerifyType 验证类型

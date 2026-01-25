@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/kamalyes/go-logger v0.4.6-0.20251220131326-ff4bf447209b
-	github.com/kamalyes/go-toolbox v0.11.87-0.20260124162909-5f07faadd52a
+	github.com/kamalyes/go-toolbox v0.11.87-0.20260125052739-096cf1a55b39
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/oliveagle/jsonpath v0.0.0-20180606110733-2e52cf6e6852
 	github.com/shirou/gopsutil/v3 v3.24.5

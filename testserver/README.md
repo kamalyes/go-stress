@@ -318,7 +318,7 @@ go run main.go -c testserver/test-signature.yaml
 
 ### 4. 查看测试报告
 
-测试完成后，HTML 报告会保存在 `stress-report/` 目录下，按时间戳命名。
+测试完成后，HTML 报告会保存在 `stress-report/` 目录下，按时间戳命名
 
 ---
 
@@ -423,7 +423,7 @@ verify:
 
 ### Q2: 依赖链执行顺序是什么？
 
-按照 `depends_on` 声明的依赖关系，使用拓扑排序确定执行顺序。没有依赖的 API 可以并行执行。
+按照 `depends_on` 声明的依赖关系，使用拓扑排序确定执行顺序没有依赖的 API 可以并行执行
 
 ### Q3: 如何调试数据提取？
 

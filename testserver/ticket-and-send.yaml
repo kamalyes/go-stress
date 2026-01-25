@@ -4,7 +4,7 @@ concurrency: 100
 requests: 100
 timeout: 15s
 
-host: http://localhost:8081
+host: http://localhost:3000
 
 headers:
   Content-Type: application/json
@@ -14,8 +14,6 @@ headers:
   User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36
   Cache-Control: no-cache
   Pragma: no-cache
-  Origin: http://localhost:8081
-  Referer: http://localhost:8081/test/WSC_TEST.html
   Proxy-Connection: keep-alive
 
 # 完整的工单创建和消息发送流程

@@ -65,3 +65,14 @@ type SubTask struct {
 	WorkerCount int    `json:"worker_count"`
 	Config      []byte `json:"config"`
 }
+
+// TaskConfig 任务配置（用于外部提交）
+type TaskConfig struct {
+	Protocol    string            `json:"protocol"`
+	Target      string            `json:"target"`
+	WorkerCount int32             `json:"worker_count"`
+	Duration    int               `json:"duration"`
+	RampUp      int               `json:"ramp_up"`
+	ConfigData  []byte            `json:"config_data"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
