@@ -84,6 +84,9 @@ type Collector struct {
 
 	// 运行模式
 	runMode string // "cli" 或 "config"
+
+	// 关闭标志
+	closed *syncx.Bool
 }
 
 // NewCollector 创建收集器（默认内存模式）
@@ -108,6 +111,7 @@ func NewCollectorWithMemoryStorage(nodeID string) *Collector {
 		storage:         storage,
 		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
 		minDuration:     time.Hour,
+		closed:          syncx.NewBool(false),
 	}
 }
 
@@ -132,6 +136,7 @@ func NewCollectorWithStorage(dbPath, nodeID string) *Collector {
 		storage:         storage,
 		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
 		minDuration:     time.Hour,
+		closed:          syncx.NewBool(false),
 	}
 }
 
@@ -300,13 +305,22 @@ func (c *Collector) GetStatusCodes() map[int]uint64 {
 
 // GetRequestDetails 获取请求明细（支持分页和筛选）
 func (c *Collector) GetRequestDetails(offset, limit int, statusFilter StatusFilter) []*RequestDetail {
+	// 检查是否已关闭
+	if c.closed.Load() {
+		logger.Default.Debug("📌 Collector 已关闭，返回空明细列表")
+		return []*RequestDetail{}
+	}
+
 	// 优先从 SQLite 存储读取
 	if c.storage != nil {
 		details, err := c.storage.Query(offset, limit, statusFilter)
 		if err == nil {
 			return details
 		}
-		logger.Default.Errorf("从存储读取失败: %v", err)
+		// 如果已关闭，不再记录错误
+		if !c.closed.Load() {
+			logger.Default.Errorf("从存储读取失败: %v", err)
+		}
 	}
 
 	// 降级：返回空切片
@@ -315,13 +329,22 @@ func (c *Collector) GetRequestDetails(offset, limit int, statusFilter StatusFilt
 
 // GetRequestDetailsCount 获取请求明细总数
 func (c *Collector) GetRequestDetailsCount(statusFilter StatusFilter) int {
+	// 检查是否已关闭
+	if c.closed.Load() {
+		logger.Default.Debug("📌 Collector 已关闭，返回明细总数 0")
+		return 0
+	}
+
 	// 优先从 SQLite 存储读取
 	if c.storage != nil {
 		count, err := c.storage.Count(statusFilter)
 		if err == nil {
 			return count
 		}
-		logger.Default.Errorf("统计总数失败: %v", err)
+		// 如果已关闭，不再记录错误
+		if !c.closed.Load() {
+			logger.Default.Errorf("统计总数失败: %v", err)
+		}
 	}
 
 	// 降级：返回0
@@ -349,7 +372,12 @@ func (c *Collector) ClearExternalReporter() {
 
 // Close 关闭收集器，释放资源
 func (c *Collector) Close() error {
+	// 设置关闭标志
+	c.closed.Store(true)
+	logger.Default.Debug("📌 Collector 已标记为关闭状态")
+
 	if c.storage != nil {
+		logger.Default.Debug("📌 正在关闭存储...")
 		return c.storage.Close()
 	}
 	return nil

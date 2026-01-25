@@ -200,6 +200,8 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 	e.realtimeServer = statistics.NewRealtimeServer(e.collector, port)
 	if err := e.realtimeServer.Start(); err != nil {
 		logger.Default.Warnf("⚠️  启动实时报告服务器失败: %v", err)
+		// 启动失败时，清空 realtimeServer 引用，避免后续误操作
+		e.realtimeServer = nil
 	} else {
 		// 将RealtimeServer设置为控制器
 		e.scheduler.controller = e.realtimeServer
@@ -236,7 +238,9 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 			return report, fmt.Errorf("执行压测失败: %w", err)
 		}
 		// 其他错误，关闭服务器
-		e.realtimeServer.Stop()
+		if e.realtimeServer != nil {
+			e.realtimeServer.Stop()
+		}
 		return nil, fmt.Errorf("执行压测失败: %w", err)
 	}
 

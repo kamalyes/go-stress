@@ -219,6 +219,16 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 确保程序退出前关闭实时报告服务器
+	defer func() {
+		if exec.GetRealtimeServer() != nil {
+			logger.Default.Debug("🔒 正在关闭实时报告服务器...")
+			if err := exec.GetRealtimeServer().Stop(); err != nil {
+				logger.Default.Warnf("⚠️  关闭实时报告服务器失败: %v", err)
+			}
+		}
+	}()
+
 	// 监听信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -298,8 +308,8 @@ func main() {
 		report.Print()
 	}
 
-	// 清理旧报告（保留最近10个）
-	cleanOldReports(10)
+	// 清理旧报告（保留最近50个）
+	cleanOldReports(50)
 
 	// 创建报告目录
 	reportDir := filepath.Join(reportPrefix, fmt.Sprintf("%d", time.Now().Unix()))
@@ -341,9 +351,13 @@ func main() {
 	logger.Default.Info("   访问 http://localhost:%d 查看实时报告", realtimePort)
 	logger.Default.Info("   按 Ctrl+C 退出程序")
 
-	// 阻塞等待中断信号
-	<-sigCh
-	logger.Default.Info("\n👋 程序已退出")
+	// 等待退出信号
+	select {
+	case <-sigCh:
+		logger.Default.Info("\n👋 程序已退出")
+	case <-ctx.Done():
+		logger.Default.Info("\n👋 程序已退出")
+	}
 }
 
 // cleanOldReports 清理旧的报告文件，保留最近的N个
