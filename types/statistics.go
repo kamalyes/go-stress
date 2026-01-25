@@ -12,6 +12,8 @@ package types
 
 import (
 	"time"
+
+	"github.com/kamalyes/go-toolbox/pkg/validator"
 )
 
 // RequestResult 请求结果（用于统计）
@@ -47,12 +49,28 @@ type RequestResult struct {
 
 // VerificationResult 验证结果
 type VerificationResult struct {
-	Type    VerifyType `json:"type"`    // 验证类型：STATUS_CODE, JSONPATH, CONTAINS等
-	Success bool       `json:"success"` // 验证是否成功
-	Skipped bool       `json:"skipped"` // 是否被跳过（未执行）
-	Message string     `json:"message"` // 验证消息（成功或失败原因）
-	Expect  string     `json:"expect"`  // 期望值
-	Actual  string     `json:"actual"`  // 实际值
+	Type        VerifyType `json:"type"`                  // 验证类型：STATUS_CODE, JSONPATH, CONTAINS等
+	Success     bool       `json:"success"`               // 验证是否成功
+	Skipped     bool       `json:"skipped"`               // 是否被跳过（未执行）
+	Message     string     `json:"message"`               // 验证消息（成功或失败原因）
+	Expect      string     `json:"expect"`                // 期望值
+	Actual      string     `json:"actual"`                // 实际值
+	Field       string     `json:"field,omitempty"`       // 验证的字段（JSONPath路径、Header名称等）
+	Operator    string     `json:"operator,omitempty"`    // 操作符（eq, ne, contains等）
+	Description string     `json:"description,omitempty"` // 验证描述
+}
+
+// NewVerificationResultFromCompare 从 validator.CompareResult 创建 VerificationResult
+// 用于将 go-toolbox/validator 的结果转换为 go-stress 的结果类型
+func NewVerificationResultFromCompare(verifyType VerifyType, cr validator.CompareResult) VerificationResult {
+	return VerificationResult{
+		Type:    verifyType,
+		Success: cr.Success,
+		Message: cr.Message,
+		Expect:  cr.Expect,
+		Actual:  cr.Actual,
+		Skipped: false,
+	}
 }
 
 // Statistics 统计数据

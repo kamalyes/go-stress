@@ -98,35 +98,41 @@ body {
 
 .metrics-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 20px;
-    padding: 30px;
-    background: #f8f9fa;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 15px;
+    padding: 25px;
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
 }
 
 .metric-card {
     background: white;
-    padding: 20px;
-    border-radius: 10px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    transition: transform 0.2s;
+    padding: 16px 12px;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border-left: 3px solid #667eea;
 }
 
 .metric-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(102, 126, 234, 0.2);
+    border-left-color: #764ba2;
 }
 
 .metric-label {
-    font-size: 0.85em;
+    font-size: 0.75em;
     color: #6c757d;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
 }
 
 .metric-value {
-    font-size: 1.8em;
-    font-weight: bold;
+    font-size: 1.6em;
+    font-weight: 700;
     color: #667eea;
+    line-height: 1.2;
 }
 
 .metric-value.success {
@@ -222,6 +228,164 @@ tbody tr:last-child {
 .status-warning {
     color: #ffa502;
     font-weight: bold;
+}
+
+/* HTTP 方法标签样式 (Swagger风格) */
+.http-method {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    text-align: center;
+    min-width: 60px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.http-method-get {
+    background-color: #61affe;
+    color: white;
+    border: 1px solid #4a90e2;
+}
+
+.http-method-post {
+    background-color: #49cc90;
+    color: white;
+    border: 1px solid #3cb371;
+}
+
+.http-method-put {
+    background-color: #fca130;
+    color: white;
+    border: 1px solid #e89020;
+}
+
+.http-method-delete {
+    background-color: #f93e3e;
+    color: white;
+    border: 1px solid #e02020;
+}
+
+.http-method-patch {
+    background-color: #50e3c2;
+    color: white;
+    border: 1px solid #40c9aa;
+}
+
+.http-method-head {
+    background-color: #9012fe;
+    color: white;
+    border: 1px solid #7a0ad4;
+}
+
+.http-method-options {
+    background-color: #0d5aa7;
+    color: white;
+    border: 1px solid #094a8a;
+}
+
+.http-method-default {
+    background-color: #6c757d;
+    color: white;
+    border: 1px solid #5a6268;
+}
+
+/* 操作按钮和下拉菜单样式 */
+.action-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.action-dropdown-btn {
+    padding: 8px 16px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.3s;
+    min-width: 120px;
+    justify-content: center;
+    height: 36px;
+}
+
+.action-dropdown-btn:hover {
+    background: #5568d3;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.action-dropdown-menu {
+    display: none;
+    position: fixed;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    min-width: 220px;
+    max-width: 300px;
+    z-index: 10000;
+    border: 1px solid #e9ecef;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.action-dropdown-menu::-webkit-scrollbar {
+    width: 6px;
+}
+
+.action-dropdown-menu::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 8px;
+}
+
+.action-dropdown-menu::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 8px;
+}
+
+.action-dropdown-menu::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+.action-dropdown-menu-item {
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #495057;
+    font-size: 14px;
+    border-bottom: 1px solid #f8f9fa;
+}
+
+.action-dropdown-menu-item:last-child {
+    border-bottom: none;
+}
+
+.action-dropdown-menu-item:hover {
+    background: #f8f9fa;
+    color: #667eea;
+}
+
+.action-dropdown-menu-item span {
+    font-size: 16px;
+}
+
+.action-menu-section {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #6c757d;
+    font-weight: 600;
+    background: #f8f9fa;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .progress-bar {

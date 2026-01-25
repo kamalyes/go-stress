@@ -81,6 +81,9 @@ type Collector struct {
 	// 外部上报器（用于分布式模式）
 	externalReporter func(*RequestResult)
 	reporterMu       *syncx.RWLock
+
+	// 运行模式
+	runMode string // "cli" 或 "config"
 }
 
 // NewCollector 创建收集器（默认内存模式）
@@ -134,6 +137,11 @@ func NewCollectorWithStorage(dbPath, nodeID string) *Collector {
 
 // Collect 收集单次请求结果
 func (c *Collector) Collect(result *RequestResult) {
+	if result == nil {
+		logger.Default.Warn("⚠️  收到空的请求结果，跳过收集")
+		return
+	}
+
 	// 调用外部上报器（如果设置了）
 	c.reporterMu.RLock()
 	if c.externalReporter != nil {
@@ -201,7 +209,7 @@ func (c *Collector) Collect(result *RequestResult) {
 			ResponseHeaders: result.ResponseHeaders,
 			Verifications:   result.Verifications,
 			ExtractedVars:   result.ExtractedVars,
-			Error:           mathx.IfEmpty(mathx.IF(result.Error != nil, result.Error.Error(), ""), ""),
+			Error:           mathx.IfDo(result.Error != nil, func() string { return result.Error.Error() }, ""),
 		}
 		c.storage.Write(detail)
 	}
@@ -320,11 +328,16 @@ func (c *Collector) GetRequestDetailsCount(statusFilter StatusFilter) int {
 	return 0
 }
 
-// SetExternalReporter 设置外部上报器（用于分布式模式）
+// SetExternalReporter 设置外部上报器
 func (c *Collector) SetExternalReporter(reporter func(*RequestResult)) {
 	c.reporterMu.Lock()
 	defer c.reporterMu.Unlock()
 	c.externalReporter = reporter
+}
+
+// SetRunMode 设置运行模式
+func (c *Collector) SetRunMode(mode string) {
+	c.runMode = mode
 }
 
 // ClearExternalReporter 清除外部上报器

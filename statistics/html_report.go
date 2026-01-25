@@ -81,6 +81,13 @@ func generateStaticFiles(reportDir, jsonFilename string) error {
 	}
 	logger.Default.Info("✅ CSS文件已生成: %s", cssPath)
 
+	// 生成 report_actions.js 文件
+	actionsJsPath := filepath.Join(reportDir, "report_actions.js")
+	if err := os.WriteFile(actionsJsPath, []byte(reportActionsJS), 0644); err != nil {
+		return fmt.Errorf("write Actions JS file failed: %w", err)
+	}
+	logger.Default.Info("✅ Actions JS文件已生成: %s", actionsJsPath)
+
 	// 生成 JS 文件（静态模式：IS_REALTIME = false，替换JSON文件名占位符）
 	jsContent := strings.ReplaceAll(reportJS, "IS_REALTIME_PLACEHOLDER", "false")
 	jsContent = strings.ReplaceAll(jsContent, "JSON_FILENAME_PLACEHOLDER", jsonFilename)

@@ -25,7 +25,8 @@ type Report struct {
 	TotalRequests   uint64  `json:"total_requests"`
 	SuccessRequests uint64  `json:"success_requests"`
 	FailedRequests  uint64  `json:"failed_requests"`
-	SuccessRate     float64 `json:"success_rate"` // 百分比 0-100
+	SkippedRequests uint64  `json:"skipped_requests"` // 跳过请求数
+	SuccessRate     float64 `json:"success_rate"`     // 百分比 0-100
 
 	// 时间统计
 	TotalTime   time.Duration `json:"total_time"`
@@ -54,11 +55,14 @@ type Report struct {
 
 	// === 实时报告专用字段 ===
 	Timestamp       int64   `json:"timestamp,omitempty"`        // Unix时间戳
-	Elapsed         int64   `json:"elapsed_seconds,omitempty"`  // 已耗时（秒）
+	Elapsed         int64   `json:"elapsed_seconds"`            // 已耗时（秒）- 移除omitempty确保始终输出
 	IsCompleted     bool    `json:"is_completed,omitempty"`     // 是否完成
 	IsPaused        bool    `json:"is_paused,omitempty"`        // 是否暂停
 	IsStopped       bool    `json:"is_stopped,omitempty"`       // 是否停止
 	RecentDurations []int64 `json:"recent_durations,omitempty"` // 最近响应时间（毫秒）用于实时图表
+
+	// 运行模式标识
+	RunMode string `json:"run_mode,omitempty"` // "cli" 或 "config"，用于前端判断是否显示GroupID/APIName
 }
 
 // Print 打印报告（使用单个多列表格）

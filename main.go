@@ -171,9 +171,12 @@ func main() {
 		if err != nil {
 			logger.Default.Fatalf("❌ 加载配置文件失败: %v", err)
 		}
+		// 设置运行模式为配置文件模式
+		cfg.RunMode = types.RunModeConfig
 	} else {
 		// 使用命令行参数
 		cfg = buildConfigFromFlags()
+		cfg.RunMode = types.RunModeCLI
 	}
 
 	// 验证配置
@@ -327,9 +330,15 @@ func main() {
 		logger.Default.Warnf("⚠️  关闭存储失败: %v", err)
 	}
 
+	// 获取实时报告服务器端口
+	realtimePort := 8088 // 默认端口
+	if realtimeServer := exec.GetRealtimeServer(); realtimeServer != nil {
+		realtimePort = realtimeServer.GetPort()
+	}
+
 	// 等待用户查看报告后手动退出
 	logger.Default.Info("\n💡 提示: 实时报告服务器仍在运行")
-	logger.Default.Info("   访问 http://localhost:8088 查看实时报告")
+	logger.Default.Info("   访问 http://localhost:%d 查看实时报告", realtimePort)
 	logger.Default.Info("   按 Ctrl+C 退出程序")
 
 	// 阻塞等待中断信号
@@ -579,7 +588,7 @@ func printExamples() {
 		"go-stress -protocol grpc -url localhost:50051 -grpc-reflection -grpc-service myservice -grpc-method MyMethod -c 5 -n 50",
 		"",
 		"# 实时监控",
-		"运行后自动打开浏览器访问 http://localhost:8088 查看实时报告",
+		"运行后自动打开浏览器查看实时报告（默认端口: 8088，可通过配置文件的 realtime_port 修改）",
 		"测试完成后生成静态HTML报告: stress-report-{时间戳}.html",
 	}
 	for _, example := range examples {

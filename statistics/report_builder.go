@@ -35,6 +35,7 @@ func (rb *ReportBuilder) BuildReport(totalTime time.Duration, includeDetails boo
 	totalReqs := c.totalRequests.Load()
 	successReqs := c.successRequests.Load()
 	failedReqs := c.failedRequests.Load()
+	skippedReqs := c.skippedRequests.Load()
 
 	// 第二步：使用 ToMap() 高级方法获取数据（一行代码搞定）
 	errors := c.errors.ToMap()
@@ -58,13 +59,15 @@ func (rb *ReportBuilder) BuildReport(totalTime time.Duration, includeDetails boo
 			TotalRequests:   totalReqs,
 			SuccessRequests: successReqs,
 			FailedRequests:  failedReqs,
+			SkippedRequests: skippedReqs,
 			TotalTime:       totalTime,
 			MinDuration:     c.minDuration,
 			MaxDuration:     c.maxDuration,
 			TotalSize:       c.totalSize,
 			Errors:          errors,
 			StatusCodes:     statusCodes,
-			RequestDetails:  nil, // 详情数据从SQLite按需加载
+			RequestDetails:  nil,       // 详情数据从SQLite按需加载
+			RunMode:         c.runMode, // 传递运行模式
 		}
 	})
 
@@ -122,14 +125,14 @@ func (rb *ReportBuilder) BuildFullReportWithLimit(totalTime time.Duration, detai
 }
 
 // BuildRealtimeReport 构建实时报告 - 不包含明细，包含实时字段
-func (rb *ReportBuilder) BuildRealtimeReport(startTime time.Time, isCompleted, isPaused, isStopped bool) *Report {
+func (rb *ReportBuilder) BuildRealtimeReport(startTime time.Time, endTime time.Time, isCompleted, isPaused, isStopped bool) *Report {
 	// 计算实际耗时
 	var elapsed time.Duration
-	var endTime time.Time
-	if isCompleted {
-		endTime = time.Now() // 如果完成，使用当前时间作为结束时间
+	if isCompleted && !endTime.IsZero() {
+		// 如果完成且有固定结束时间，使用固定结束时间（避免QPS持续变化）
 		elapsed = endTime.Sub(startTime)
 	} else {
+		// 否则使用当前时间（实时计算）
 		elapsed = time.Since(startTime)
 	}
 

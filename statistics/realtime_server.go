@@ -57,12 +57,18 @@ func NewRealtimeServer(collector *Collector, port int) *RealtimeServer {
 	}
 }
 
+// GetPort 获取实时报告服务器端口
+func (s *RealtimeServer) GetPort() int {
+	return s.port
+}
+
 // Start 启动服务器
 func (s *RealtimeServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/report.css", s.handleCSS)
 	mux.HandleFunc("/report.js", s.handleJS)
+	mux.HandleFunc("/report_actions.js", s.handleActionsJS)
 	mux.HandleFunc("/stream", s.handleStream)
 	mux.HandleFunc("/api/data", s.handleData)
 	mux.HandleFunc("/api/details", s.handleDetails)
@@ -156,6 +162,12 @@ func (s *RealtimeServer) handleJS(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(jsContent))
 }
 
+// handleActionsJS 提供操作功能JavaScript脚本文件
+func (s *RealtimeServer) handleActionsJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Write([]byte(reportActionsJS))
+}
+
 // handleStream 处理SSE流
 func (s *RealtimeServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	// 设置SSE响应头
@@ -218,15 +230,16 @@ func (s *RealtimeServer) handleData(w http.ResponseWriter, r *http.Request) {
 
 // collectData 收集当前数据 - 使用ReportBuilder简化逻辑
 func (s *RealtimeServer) collectData() *Report {
-	// 读取状态
+	// 读取状态（包括endTime，用于完成后的固定时间计算）
 	s.mu.RLock()
 	isCompleted := s.isCompleted
 	isPaused := s.isPaused
 	isStopped := s.isStopped
+	endTime := s.endTime
 	s.mu.RUnlock()
 
-	// 使用ReportBuilder构建实时报告（自动计算所有指标）
-	return s.builder.BuildRealtimeReport(s.startTime, isCompleted, isPaused, isStopped)
+	// 使用ReportBuilder构建实时报告（传递endTime避免完成后QPS持续变化）
+	return s.builder.BuildRealtimeReport(s.startTime, endTime, isCompleted, isPaused, isStopped)
 }
 
 // handleDetails 处理请求明细API

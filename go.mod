@@ -5,7 +5,8 @@ go 1.24.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/kamalyes/go-logger v0.4.6-0.20251220131326-ff4bf447209b
-	github.com/kamalyes/go-toolbox v0.11.87-0.20260125033609-946ecd821ad9
+	github.com/kamalyes/go-toolbox v0.11.87-0.20260124162909-5f07faadd52a
+	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/oliveagle/jsonpath v0.0.0-20180606110733-2e52cf6e6852
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/shirou/gopsutil/v4 v4.25.12
@@ -27,7 +28,6 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/mattn/go-sqlite3 v1.14.33 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

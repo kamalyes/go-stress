@@ -8,9 +8,16 @@ const ELEMENT_IDS = {
   TOTAL_REQUESTS: 'total-requests',
   SUCCESS_REQUESTS: 'success-requests',
   FAILED_REQUESTS: 'failed-requests',
+  SKIPPED_REQUESTS: 'skipped-requests',
   SUCCESS_RATE: 'success-rate',
   QPS: 'qps',
   AVG_DURATION: 'avg-duration',
+  MIN_DURATION: 'min-duration',
+  MAX_DURATION: 'max-duration',
+  P50: 'p50',
+  P90: 'p90',
+  P95: 'p95',
+  P99: 'p99',
   ELAPSED: 'elapsed',
   TEST_DURATION: 'test-duration',
   
@@ -66,6 +73,53 @@ const TAB_NAMES = {
   FAILED: 'failed',
   SKIPPED: 'skipped'
 };
+
+// ============ 验证状态常量 ============
+const VERIFY_STATUS = {
+  SKIPPED: {
+    color: '#6c757d',
+    bg: '#f8f9fa',
+    border: '#dee2e6',
+    text: '未执行',
+    icon: '⏭',
+    class: 'status-warning'
+  },
+  SUCCESS: {
+    color: '#38ef7d',
+    bg: '#f0fdf4',
+    border: '#86efac',
+    text: '验证通过',
+    icon: '✓',
+    class: 'status-success'
+  },
+  FAILED: {
+    color: '#f45c43',
+    bg: '#fff5f5',
+    border: '#feb2b2',
+    text: '验证失败',
+    icon: '✗',
+    class: 'status-error'
+  }
+};
+
+// ============ HTTP 方法样式映射 (Swagger风格) ============
+const HTTP_METHOD_STYLES = {
+  GET: 'http-method-get',
+  POST: 'http-method-post',
+  PUT: 'http-method-put',
+  DELETE: 'http-method-delete',
+  PATCH: 'http-method-patch',
+  HEAD: 'http-method-head',
+  OPTIONS: 'http-method-options'
+};
+
+// 格式化 HTTP 方法为带样式的标签
+function formatHttpMethod(method) {
+  if (!method) return '<span class="http-method http-method-default">N/A</span>';
+  const upperMethod = method.toUpperCase();
+  const className = HTTP_METHOD_STYLES[upperMethod] || 'http-method-default';
+  return '<span class="http-method ' + className + '">' + upperMethod + '</span>';
+}
 
 let durationChart, statusChart, errorChart;
 const isRealtime = (typeof IS_REALTIME_PLACEHOLDER !== 'undefined' && IS_REALTIME_PLACEHOLDER) || false;
@@ -299,9 +353,20 @@ function updateStaticMetrics(data) {
   setTextContent(ELEMENT_IDS.TOTAL_REQUESTS, data.total_requests || 0);
   setTextContent(ELEMENT_IDS.SUCCESS_REQUESTS, data.success_requests || 0);
   setTextContent(ELEMENT_IDS.FAILED_REQUESTS, data.failed_requests || 0);
+  setTextContent(ELEMENT_IDS.SKIPPED_REQUESTS, data.skipped_requests || 0);
   setTextContent(ELEMENT_IDS.SUCCESS_RATE, (data.success_rate || 0).toFixed(2) + "%");
   setTextContent(ELEMENT_IDS.QPS, (data.qps || 0).toFixed(2));
   setTextContent(ELEMENT_IDS.AVG_DURATION, (data.avg_duration_ms || 0).toFixed(2) + "ms");
+  
+  // 响应时间统计
+  setTextContent(ELEMENT_IDS.MIN_DURATION, (data.min_duration_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.MAX_DURATION, (data.max_duration_ms || 0).toFixed(2) + "ms");
+  
+  // 百分位统计
+  setTextContent(ELEMENT_IDS.P50, (data.p50_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P90, (data.p90_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P95, (data.p95_ms || 0).toFixed(2) + "ms");
+  setTextContent(ELEMENT_IDS.P99, (data.p99_ms || 0).toFixed(2) + "ms");
   
   // 静态报告特有的：测试时长（使用total_time）
   const totalTimeSec = data.total_time_ms ? (data.total_time_ms / 1000).toFixed(2) : 0;
@@ -356,23 +421,35 @@ function renderStaticDetails(details) {
       const statusClass = req.skipped ? "status-warning" : (req.success ? "status-success" : "status-error");
       const statusText = req.skipped ? "⏭ 跳过" : (req.success ? "✓ 成功" : "✗ 失败");
       const detailsId = "details-" + index;
-      const verifyStatus =
-        req.verifications && req.verifications.length > 0
-          ? req.verifications.every((v) => v.success)
-            ? "✓ 通过"
-            : "✗ 失败"
-          : "-";
-      const verifyClass =
-        req.verifications && req.verifications.length > 0
-          ? req.verifications.every((v) => v.success)
-            ? "status-success"
-            : "status-error"
-          : "";
+      
+      // 验证状态：考虑跳过、成功、失败三种情况
+      let verifyStatus = "-";
+      let verifyClass = "";
+      if (req.verifications && req.verifications.length > 0) {
+        const allSkipped = req.verifications.every((v) => v.skipped);
+        const allSuccess = req.verifications.every((v) => v.success || v.skipped);
+        
+        if (allSkipped) {
+          verifyStatus = VERIFY_STATUS.SKIPPED.icon + " " + VERIFY_STATUS.SKIPPED.text;
+          verifyClass = VERIFY_STATUS.SKIPPED.class;
+        } else if (allSuccess) {
+          verifyStatus = VERIFY_STATUS.SUCCESS.icon + " " + VERIFY_STATUS.SUCCESS.text;
+          verifyClass = VERIFY_STATUS.SUCCESS.class;
+        } else {
+          verifyStatus = VERIFY_STATUS.FAILED.icon + " " + VERIFY_STATUS.FAILED.text;
+          verifyClass = VERIFY_STATUS.FAILED.class;
+        }
+      }
 
       let html = '<tr style="cursor:pointer;" onclick="toggleDetails(\'' + detailsId + '\')">';
       html += "<td>" + (index + 1) + "</td>";
-      html += "<td>" + (req.group_id || "-") + "</td>";
-      html += "<td>" + (req.api_name || "-") + "</td>";
+      
+      // 根据运行模式决定是否显示GroupID和APIName
+      if (window.reportData && window.reportData.run_mode != 'cli') {
+        html += "<td>" + (req.group_id || "-") + "</td>";
+        html += "<td>" + (req.api_name || "-") + "</td>";
+      }
+      
       html += "<td>" + (req.timestamp ? new Date(req.timestamp).toLocaleTimeString() : "-") + "</td>";
       html +=
         '<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;" title="' +
@@ -380,7 +457,7 @@ function renderStaticDetails(details) {
         '">' +
         (req.url || req.request_url || "") +
         "</td>";
-      html += "<td>" + (req.method || req.request_method || "") + "</td>";
+      html += "<td>" + formatHttpMethod(req.method || req.request_method) + "</td>";
       html += "<td>" + ((req.duration ? req.duration / 1000000 : req.duration_ms) || 0).toFixed(2) + "ms</td>";
       html += "<td>" + (req.skipped ? '-' : (req.status_code || 0)) + "</td>";
       html +=
@@ -740,6 +817,15 @@ function formatCodeBlock(content, label) {
 
 function generateDetailContent(req) {
   const tabId = 'tab-' + Math.random().toString(36).substr(2, 9);
+  const reqId = 'req-' + Math.random().toString(36).substr(2, 9);
+  const menuId = 'menu-' + reqId;
+  
+  // 将请求数据保存到全局变量供按钮使用（在生成HTML之前）
+  if (!window.requestDataStore) {
+    window.requestDataStore = {};
+  }
+  window.requestDataStore[reqId] = req;
+  
   let html = '<div class="detail-tabs-container">';
   
   // 跳过提示
@@ -750,8 +836,11 @@ function generateDetailContent(req) {
     html += '</div>';
   }
   
-  // Tab按钮
-  html += '<div class="detail-tabs-header">';
+  // Tab按钮和更多操作在同一行
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e9ecef;background:white;margin-bottom:20px;">';
+  
+  // 左侧：Tab按钮
+  html += '<div class="detail-tabs-header" style="border-bottom:none;flex:1;">';
   html += '<button class="detail-tab-btn active" onclick="switchDetailTab(event, \'' + tabId + '-url\')">请求信息</button>';
   
   if (req.headers || req.request_headers) {
@@ -775,32 +864,56 @@ function generateDetailContent(req) {
     // 判断验证状态：跳过、全部通过、有失败
     const allSkipped = req.verifications.every(v => v.skipped);
     const allPassed = req.verifications.every(v => v.success || v.skipped);
-    const hasSkipped = req.verifications.some(v => v.skipped);
     
-    let tabColor, tabLabel;
+    let statusConfig;
     if (allSkipped) {
-      // 全部跳过（灰色）
-      tabColor = '#6c757d';
-      tabLabel = '⏭ 未执行';
+      statusConfig = VERIFY_STATUS.SKIPPED;
     } else if (allPassed) {
-      // 全部通过（绿色）
-      tabColor = '#38ef7d';
-      tabLabel = '✓ 验证通过';
+      statusConfig = VERIFY_STATUS.SUCCESS;
     } else {
-      // 有失败（红色）
-      tabColor = '#f45c43';
-      tabLabel = '✗ 验证失败';
+      statusConfig = VERIFY_STATUS.FAILED;
     }
     
-    html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-verify\')" style="color:' + tabColor + ';">' + 
-      tabLabel + '</button>';
+    html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-verify\')" style="color:' + statusConfig.color + ';">' + 
+      statusConfig.icon + ' ' + statusConfig.text + '</button>';
   }
   
   if (req.error) {
     html += '<button class="detail-tab-btn" onclick="switchDetailTab(event, \'' + tabId + '-error\')">错误</button>';
   }
   
+  html += '</div>'; // 结束 detail-tabs-header
+  
+  // 右侧：更多操作下拉菜单
+  html += '<div class="action-dropdown" style="margin:0 10px;">';
+  html += '  <button class="action-dropdown-btn" onclick="toggleActionMenu(\''+menuId+'\', event)">';
+  html += '    <span>⚙️</span> 更多操作 <span style="margin-left:auto;">▼</span>';
+  html += '  </button>';
+  html += '  <div id="'+menuId+'" class="action-dropdown-menu">';
+  html += '    <div class="action-dropdown-menu-item" onclick="copyAs(window.requestDataStore[\''+reqId+'\'], \'full-request\', this)" style="font-weight:600;color:#667eea;">';
+  html += '      <span>📄</span> 复制完整请求';
+  html += '    </div>';
+  html += '    <div class="action-menu-section">复制为代码</div>';
+  html += '    <div class="action-dropdown-menu-item" onclick="copyAs(window.requestDataStore[\''+reqId+'\'], \'go-stress\', this)" style="font-weight:600;color:#10b981;">';
+  html += '      <span>🚀</span> go-stress';
+  html += '    </div>';
+  html += '    <div class="action-dropdown-menu-item" onclick="copyAs(window.requestDataStore[\''+reqId+'\'], \'curl-bash\', this)">';
+  html += '      <span>📋</span> curl (bash)';
+  html += '    </div>';
+  html += '    <div class="action-dropdown-menu-item" onclick="copyAs(window.requestDataStore[\''+reqId+'\'], \'curl-cmd\', this)">';
+  html += '      <span>📋</span> curl (cmd)';
+  html += '    </div>';
+  html += '    <div class="action-dropdown-menu-item" onclick="copyAs(window.requestDataStore[\''+reqId+'\'], \'powershell\', this)">';
+  html += '      <span>💻</span> PowerShell';
+  html += '    </div>';
+  html += '    <div class="action-menu-section">操作</div>';
+  html += '    <div class="action-dropdown-menu-item" onclick="replayRequest(window.requestDataStore[\''+reqId+'\'], this)">';
+  html += '      <span>🔄</span> 重放请求';
+  html += '    </div>';
+  html += '  </div>';
   html += '</div>';
+  
+  html += '</div>'; // 结束 flex 容器
   
   // Tab内容
   html += '<div class="detail-tabs-content">';
@@ -811,7 +924,7 @@ function generateDetailContent(req) {
   if (req.query || req.request_query) {
     html += '<div class="detail-section"><strong>请求Query:</strong><pre>' + escapeHtml(req.query || req.request_query) + '</pre></div>';
   }
-  html += '<div class="detail-section"><strong>请求方法:</strong><pre>' + escapeHtml(req.method || req.request_method || "") + '</pre></div>';
+  html += '<div class="detail-section"><strong>请求方法:</strong> ' + formatHttpMethod(req.method || req.request_method) + '</div>';
   html += '<div class="detail-section"><strong>响应时间:</strong><pre>' + ((req.duration ? req.duration / 1000000 : req.duration_ms) || 0).toFixed(2) + 'ms</pre></div>';
   html += '<div class="detail-section"><strong>状态码:</strong><pre>' + (req.status_code || 0) + '</pre></div>';
   html += '</div>';
@@ -899,57 +1012,72 @@ function generateDetailContent(req) {
     html += '<div style="background:#f8f9fa;padding:15px;border-radius:8px;">';
     
     req.verifications.forEach((verify, idx) => {
-      // 判断验证状态：跳过、成功、失败
-      let statusColor, statusBg, statusBorder, statusText, statusIcon;
+      // 根据验证状态获取样式配置
+      let statusConfig;
       if (verify.skipped) {
-        // 跳过状态（灰色）
-        statusColor = '#6c757d';
-        statusBg = '#f8f9fa';
-        statusBorder = '#dee2e6';
-        statusText = '未执行';
-        statusIcon = '⏭';
+        statusConfig = VERIFY_STATUS.SKIPPED;
       } else if (verify.success) {
-        // 成功状态（绿色）
-        statusColor = '#38ef7d';
-        statusBg = '#f0fdf4';
-        statusBorder = '#86efac';
-        statusText = '验证通过';
-        statusIcon = '✓';
+        statusConfig = VERIFY_STATUS.SUCCESS;
       } else {
-        // 失败状态（红色）
-        statusColor = '#f45c43';
-        statusBg = '#fff5f5';
-        statusBorder = '#feb2b2';
-        statusText = '验证失败';
-        statusIcon = '✗';
+        statusConfig = VERIFY_STATUS.FAILED;
       }
       
-      html += '<div style="background:white;padding:15px;border-radius:8px;margin-bottom:10px;border:2px solid ' + statusBorder + ';">';
+      html += '<div style="background:white;padding:15px;border-radius:8px;margin-bottom:10px;border:2px solid ' + statusConfig.border + ';">';
       html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">';
-      html += '<span style="font-size:20px;">' + statusIcon + '</span>';
-      html += '<strong style="color:' + statusColor + ';">' + statusText + '</strong>';
+      html += '<span style="font-size:20px;">' + statusConfig.icon + '</span>';
+      html += '<strong style="color:' + statusConfig.color + ';">' + statusConfig.text + '</strong>';
       html += '</div>';
       
-      if (verify.name) {
-        html += '<div style="margin-bottom:8px;"><strong>验证名称:</strong> ' + escapeHtml(verify.name) + '</div>';
+      if (verify.description) {
+        html += '<div style="margin-bottom:8px;"><strong>📝 描述:</strong> ' + escapeHtml(verify.description) + '</div>';
       }
       
       if (verify.type) {
-        html += '<div style="margin-bottom:8px;"><strong>验证类型:</strong> ' + escapeHtml(verify.type) + '</div>';
+        html += '<div style="margin-bottom:8px;"><strong>🔍 验证类型:</strong> ' + escapeHtml(verify.type) + '</div>';
       }
       
-      if (verify.expected !== undefined) {
-        html += '<div style="margin-bottom:8px;"><strong>期望值:</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' + 
+      if (verify.field) {
+        let fieldLabel = '字段';
+        if (verify.type === 'JSONPATH') {
+          fieldLabel = 'JSONPath';
+        } else if (verify.type === 'HEADER') {
+          fieldLabel = 'Header';
+        } else if (verify.type === 'REGEX') {
+          fieldLabel = '正则表达式';
+        }
+        html += '<div style="margin-bottom:8px;"><strong>📍 ' + fieldLabel + ':</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' + 
+          escapeHtml(verify.field) + '</code></div>';
+      }
+      
+      if (verify.operator) {
+        const operatorMap = {
+          'eq': '等于 (=)',
+          'ne': '不等于 (≠)',
+          'gt': '大于 (>)',
+          'lt': '小于 (<)',
+          'gte': '大于等于 (≥)',
+          'lte': '小于等于 (≤)',
+          'contains': '包含',
+          'regex': '正则匹配',
+          'hasPrefix': '前缀匹配',
+          'hasSuffix': '后缀匹配'
+        };
+        const operatorText = operatorMap[verify.operator] || verify.operator;
+        html += '<div style="margin-bottom:8px;"><strong>⚙️ 操作符:</strong> ' + escapeHtml(operatorText) + '</div>';
+      }
+      
+      if (verify.expected !== undefined && verify.expected !== null) {
+        html += '<div style="margin-bottom:8px;"><strong>✓ 期望值:</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' + 
           escapeHtml(String(verify.expected)) + '</code></div>';
       }
       
-      if (verify.actual !== undefined) {
-        html += '<div style="margin-bottom:8px;"><strong>实际值:</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' + 
+      if (verify.actual !== undefined && verify.actual !== null) {
+        html += '<div style="margin-bottom:8px;"><strong>📊 实际值:</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' + 
           escapeHtml(String(verify.actual)) + '</code></div>';
       }
       
       if (verify.message) {
-        html += '<div style="margin-top:10px;padding:10px;background:' + statusBg + ';border-radius:4px;color:' + statusColor + ';">' + 
+        html += '<div style="margin-top:10px;padding:10px;background:' + statusConfig.bg + ';border-radius:4px;color:' + statusConfig.color + ';">' + 
           escapeHtml(verify.message) + '</div>';
       }
       
@@ -1005,17 +1133,32 @@ window.switchDetailTab = function(event, tabId) {
 if (isRealtime) {
   // 实时模式 - 更新指标
   window.updateMetrics = function (data) {
-    document.getElementById(ELEMENT_IDS.TOTAL_REQUESTS).textContent = data.total_requests;
+    document.getElementById(ELEMENT_IDS.TOTAL_REQUESTS).textContent = data.total_requests || 0;
     document.getElementById(ELEMENT_IDS.SUCCESS_REQUESTS).textContent =
-      data.success_requests;
+      data.success_requests || 0;
     document.getElementById(ELEMENT_IDS.FAILED_REQUESTS).textContent =
-      data.failed_requests;
+      data.failed_requests || 0;
+    document.getElementById(ELEMENT_IDS.SKIPPED_REQUESTS).textContent =
+      data.skipped_requests || 0;
     document.getElementById(ELEMENT_IDS.SUCCESS_RATE).textContent =
-      data.success_rate.toFixed(2) + "%";
-    document.getElementById(ELEMENT_IDS.QPS).textContent = data.qps.toFixed(2);
+      (data.success_rate || 0).toFixed(2) + "%";
+    document.getElementById(ELEMENT_IDS.QPS).textContent = (data.qps || 0).toFixed(2);
     document.getElementById(ELEMENT_IDS.AVG_DURATION).textContent =
-      data.avg_duration_ms + "ms";
-    document.getElementById(ELEMENT_IDS.ELAPSED).textContent = data.elapsed_seconds + "s";
+      (data.avg_duration_ms || 0).toFixed(2) + "ms";
+    
+    // 响应时间统计
+    document.getElementById(ELEMENT_IDS.MIN_DURATION).textContent =
+      (data.min_duration_ms || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.MAX_DURATION).textContent =
+      (data.max_duration_ms || 0).toFixed(2) + "ms";
+    
+    // 百分位统计
+    document.getElementById(ELEMENT_IDS.P50).textContent = (data.p50_ms || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P90).textContent = (data.p90_ms || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P95).textContent = (data.p95_ms || 0).toFixed(2) + "ms";
+    document.getElementById(ELEMENT_IDS.P99).textContent = (data.p99_ms || 0).toFixed(2) + "ms";
+    
+    document.getElementById(ELEMENT_IDS.ELAPSED).textContent = (data.elapsed_seconds || 0) + "s";
     
     // 检查任务状态并更新按钮
     const pauseBtn = document.getElementById(ELEMENT_IDS.PAUSE_BTN);
@@ -1137,8 +1280,11 @@ if (isRealtime) {
         window.realtimeStats.failed_count = data.failed_count || 0;
         window.realtimeStats.skipped_count = data.skipped_count || 0;
         
-        // 渲染当前页数据
+        // 保存当前页的详细数据，供"查看详情"按钮使用
         const details = data.details || [];
+        allDetailsData = details;
+        
+        // 渲染当前页数据
         renderRealtimeDetails(details);
         
         // 更新分页控件
@@ -1168,18 +1314,24 @@ if (isRealtime) {
         row.style.cursor = "pointer";
         row.onclick = () => toggleRealtimeDetail(idx);
         
-        const verifyStatus =
-          detail.verifications && detail.verifications.length > 0
-            ? detail.verifications.every((v) => v.success)
-              ? "✓ 通过"
-              : "✗ 失败"
-            : "-";
-        const verifyClass =
-          detail.verifications && detail.verifications.length > 0
-            ? detail.verifications.every((v) => v.success)
-              ? "status-success"
-              : "status-error"
-            : "";
+        // 验证状态：考虑跳过、成功、失败三种情况
+        let verifyStatus = "-";
+        let verifyClass = "";
+        if (detail.verifications && detail.verifications.length > 0) {
+          const allSkipped = detail.verifications.every((v) => v.skipped);
+          const allSuccess = detail.verifications.every((v) => v.success || v.skipped);
+          
+          if (allSkipped) {
+            verifyStatus = VERIFY_STATUS.SKIPPED.icon + " " + VERIFY_STATUS.SKIPPED.text;
+            verifyClass = VERIFY_STATUS.SKIPPED.class;
+          } else if (allSuccess) {
+            verifyStatus = VERIFY_STATUS.SUCCESS.icon + " " + VERIFY_STATUS.SUCCESS.text;
+            verifyClass = VERIFY_STATUS.SUCCESS.class;
+          } else {
+            verifyStatus = VERIFY_STATUS.FAILED.icon + " " + VERIFY_STATUS.FAILED.text;
+            verifyClass = VERIFY_STATUS.FAILED.class;
+          }
+        }
 
         row.innerHTML = `
                     <td>${detail.id}</td>
@@ -1189,7 +1341,7 @@ if (isRealtime) {
                     <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${
                       detail.url || "-"
                     }">${detail.url || "-"}</td>
-                    <td>${detail.method || "-"}</td>
+                    <td>${formatHttpMethod(detail.method)}</td>
                     <td>${(detail.duration / 1000000).toFixed(2)}ms</td>
                     <td>${detail.skipped ? '-' : (detail.status_code || "-")}</td>
                     <td class="${
@@ -1205,8 +1357,6 @@ if (isRealtime) {
         detailRow.id = "realtime-detail-" + idx;
         detailRow.innerHTML =
           '<td colspan="12"><div class="detail-content">明细内容...</div></td>';
-
-        // 不自动恢复展开状态,保持收起
       });
     } else {
       tbody.innerHTML =
@@ -1237,12 +1387,21 @@ if (isRealtime) {
   // SSE连接
   window.connectSSE = function () {
     const eventSource = new EventSource("/stream");
+    let lastTotalRequests = 0;
 
     eventSource.onmessage = function (event) {
       const data = JSON.parse(event.data);
       updateMetrics(data);
       updateCharts(data);
-      loadDetails();
+      
+      // 只有当总请求数变化时才重新加载数据
+      if (data.total_requests !== lastTotalRequests) {
+        lastTotalRequests = data.total_requests;
+        // 只在第一页时才自动刷新
+        if (currentPage === 1) {
+          loadDetails();
+        }
+      }
     };
 
     eventSource.onerror = function () {

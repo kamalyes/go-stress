@@ -20,6 +20,7 @@ type (
 	VerifyType     = types.VerifyType
 	ExtractorType  = types.ExtractorType
 	ExpectOperator = types.ExpectOperator
+	RunMode        = types.RunMode
 )
 
 // 常量别名

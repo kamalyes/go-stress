@@ -14,3 +14,6 @@ import _ "embed"
 
 //go:embed  report.js
 var reportJS string
+
+//go:embed report_actions.js
+var reportActionsJS string

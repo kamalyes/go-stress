@@ -16,6 +16,7 @@ const reportHTML = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Go-Stress {{if .IsRealtime}}实时{{end}}性能测试报告</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%23667eea;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%23764ba2;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='20' fill='url(%23grad)'/%3E%3Cpath d='M30 55 L45 70 L70 30' stroke='white' stroke-width='8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M25 30 L35 30 M65 70 L75 70 M30 25 L30 35 M70 65 L70 75' stroke='%2338ef7d' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="report.css">
 </head>
@@ -73,6 +74,10 @@ const reportHTML = `<!DOCTYPE html>
                 <div class="metric-value error" id="failed-requests">0</div>
             </div>
             <div class="metric-card">
+                <div class="metric-label">跳过请求</div>
+                <div class="metric-value" style="color: #ffc107;" id="skipped-requests">0</div>
+            </div>
+            <div class="metric-card">
                 <div class="metric-label">成功率</div>
                 <div class="metric-value" id="success-rate">0%</div>
             </div>
@@ -83,6 +88,30 @@ const reportHTML = `<!DOCTYPE html>
             <div class="metric-card">
                 <div class="metric-label">平均响应时间</div>
                 <div class="metric-value" id="avg-duration">0ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">最小响应时间</div>
+                <div class="metric-value" id="min-duration">0ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">最大响应时间</div>
+                <div class="metric-value" id="max-duration">0ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">P50 (中位数)</div>
+                <div class="metric-value" id="p50">0ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">P90</div>
+                <div class="metric-value" id="p90">0ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">P95</div>
+                <div class="metric-value" id="p95">0ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">P99</div>
+                <div class="metric-value" id="p99">0ms</div>
             </div>
             {{if .IsRealtime}}
             <div class="metric-card">
@@ -210,6 +239,7 @@ const reportHTML = `<!DOCTYPE html>
         </div>
     </div>
     
+    <script src="report_actions.js"></script>
     <script src="report.js"></script>
 </body>
 </html>

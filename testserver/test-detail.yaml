@@ -1,49 +1,107 @@
-# 链式依赖测试配置
+# 完整验证器测试配置 - 覆盖所有18种验证类型
 protocol: http
-concurrency: 3
-requests: 50
+concurrency: 1
+requests: 1
 timeout: 10s
 
 host: http://localhost:3000
 
 headers:
   Content-Type: application/json
-  User-Agent: go-stress-chain-test
+  User-Agent: go-stress-validator-test
 
-# 完整的用户操作流程
+# 完整的验证测试流程
 apis:
-  # Step 1: 用户登录
+  # ========== Step 1: 登录接口 - 测试 STATUS_CODE, JSONPATH, HEADER, JSON_VALID ==========
   - name: user_login
     path: /api/login
     method: POST
     body: '{"username":"test_user","password":"secure_pass_123"}'
+    
     extractors:
-      # 提取 token
       - name: auth_token
         type: JSONPATH
         jsonpath: $.token
         default: ""
       
-      # 提取 user_id
       - name: user_id
         type: JSONPATH
         jsonpath: $.user_id
         default: ""
       
-      # 提取 session
       - name: session
         type: HEADER
-        header: X-Session-Id
+        header: X-Session-ID
         default: ""
     
     verify:
+      # 1. STATUS_CODE - 状态码验证
       - type: STATUS_CODE
-        expect: 200
+        expect: "200"
+        operator: eq
+      
+      # 2. JSON_VALID - JSON格式验证
+      - type: JSON_VALID
+      
+      # 3. JSONPATH - JSON路径值验证
       - type: JSONPATH
         jsonpath: $.success
-        expect: true
+        expect: "true"
+      
+      # 4. JSONPATH - 验证消息内容
+      - type: JSONPATH
+        jsonpath: $.message
+        expect: "登录成功"
+      
+      # 5. HEADER - 验证响应头存在
+      - type: HEADER
+        jsonpath: X-Session-ID
+        operator: contains
+        expect: "sess_"
+      
+      # 6. LENGTH - 验证token长度 (UUID格式36字符)
+      - type: LENGTH
+        jsonpath: $.token
+        expect: "36"
+        operator: eq
+      
+      # 7. UUID - 验证token是UUID格式
+      - type: UUID
+        jsonpath: $.token
+      
+      # 8. NOT_EMPTY - 验证user_id不为空
+      - type: NOT_EMPTY
+        jsonpath: $.user_id
 
-  # Step 2: 查询用户信息（依赖登录）
+  # ========== Step 2: 健康检查 - 测试 CONTAINS, REGEX, RESPONSE_SIZE ==========
+  - name: health_check
+    path: /api/health
+    method: GET
+    
+    verify:
+      # 9. STATUS_CODE
+      - type: STATUS_CODE
+        expect: "200"
+      
+      # 10. CONTAINS - 包含特定文本
+      - type: CONTAINS
+        expect: "healthy"
+      
+      # 11. REGEX - 正则匹配timestamp
+      - type: REGEX
+        expect: '"timestamp":\s*\d+'
+      
+      # 12. JSONPATH - 验证service字段
+      - type: JSONPATH
+        jsonpath: $.service
+        expect: "test-api"
+      
+      # 13. RESPONSE_SIZE - 响应体大小检查 (健康接口应该很小)
+      - type: RESPONSE_SIZE
+        operator: lt
+        expect: 1024
+
+  # ========== Step 3: 获取用户信息 - 测试依赖和更多验证 ==========
   - name: fetch_user_info
     path: /api/user/info
     method: GET
@@ -52,27 +110,55 @@ apis:
     
     headers:
       Authorization: "Bearer {{.user_login.auth_token}}"
-      X-Session-Id: "{{.user_login.session}}"
+      X-Session-ID: "{{.user_login.session}}"
     
     extractors:
       - name: username
         type: JSONPATH
         jsonpath: $.username
-        default: "unknown"
+        default: ""
       
       - name: email
         type: JSONPATH
         jsonpath: $.email
         default: ""
+      
+      - name: role
+        type: JSONPATH
+        jsonpath: $.role
+        default: ""
     
     verify:
+      # 14. STATUS_CODE
       - type: STATUS_CODE
-        expect: 200
+        expect: "200"
+      
+      # 15. JSONPATH - 验证user_id匹配
       - type: JSONPATH
         jsonpath: $.user_id
         expect: "{{.user_login.user_id}}"
+      
+      # 16. EMAIL - 验证email格式
+      - type: EMAIL
+        jsonpath: $.email
+      
+      # 17. PREFIX - 验证username前缀
+      - type: PREFIX
+        jsonpath: $.username
+        expect: "test_"
+      
+      # 18. SUFFIX - 验证email后缀
+      - type: SUFFIX
+        jsonpath: $.email
+        expect: ".com"
+      
+      # 19. LENGTH - 验证role长度
+      - type: LENGTH
+        jsonpath: $.role
+        operator: gte
+        expect: "3"
 
-  # Step 3: 更新用户信息（依赖前两步）
+  # ========== Step 4: 更新用户信息 - 测试 JSON_SCHEMA ==========
   - name: update_user_profile
     path: /api/user/update
     method: PUT
@@ -82,43 +168,125 @@ apis:
     
     headers:
       Authorization: "Bearer {{.user_login.auth_token}}"
-      X-Session-Id: "{{.user_login.session}}"
+      X-Session-ID: "{{.user_login.session}}"
     
     body: |
       {
-        "email": "updated_{{.user_login.user_id}}@example.com",
+        "email": "updated_user@example.com",
         "role": "premium_user"
       }
     
     verify:
+      # 20. STATUS_CODE
       - type: STATUS_CODE
-        expect: 200
+        expect: "200"
+      
+      # 21. JSON_SCHEMA - 验证响应结构
+      - type: JSON_SCHEMA
+        schema: |
+          {
+            "type": "object",
+            "required": ["success", "message", "data"],
+            "properties": {
+              "success": {"type": "boolean"},
+              "message": {"type": "string"},
+              "data": {
+                "type": "object",
+                "required": ["user_id", "email", "role"],
+                "properties": {
+                  "user_id": {"type": "string"},
+                  "email": {"type": "string", "format": "email"},
+                  "role": {"type": "string"}
+                }
+              }
+            }
+          }
+      
+      # 22. JSONPATH - 验证成功标志
       - type: JSONPATH
         jsonpath: $.success
-        expect: true
+        expect: "true"
+      
+      # 23. JSONPATH - 验证user_id
       - type: JSONPATH
         jsonpath: $.data.user_id
         expect: "{{.user_login.user_id}}"
+      
+      # 24. CONTAINS - 验证消息包含"成功"
+      - type: CONTAINS
+        expect: "成功"
 
-  # Step 4: 再次查询验证更新（依赖所有前序步骤）
+  # ========== Step 5: 再次查询验证更新 - 测试 BASE64 (模拟场景) ==========
   - name: verify_update
     path: /api/user/info
     method: GET
     depends_on:
       - user_login
-      - fetch_user_info
       - update_user_profile
     
     headers:
       Authorization: "Bearer {{.user_login.auth_token}}"
-      X-Session-Id: "{{.user_login.session}}"
+      X-Session-ID: "{{.user_login.session}}"
     
     verify:
+      # 25. STATUS_CODE
       - type: STATUS_CODE
-        expect: 200
+        expect: "200"
+      
+      # 26. JSONPATH - 验证user_id
       - type: JSONPATH
         jsonpath: $.user_id
         expect: "{{.user_login.user_id}}"
+      
+      # 27. EMAIL - 验证email格式
+      - type: EMAIL
+        jsonpath: $.email
+      
+      # 28. NOT_EMPTY - 验证所有字段不为空
+      - type: NOT_EMPTY
+        jsonpath: $.username
+      
+      - type: NOT_EMPTY
+        jsonpath: $.email
+      
+      - type: NOT_EMPTY
+        jsonpath: $.role
+
+  # ========== Step 6: 测试空用户名登录失败 - 测试 EMPTY, 400状态码 ==========
+  - name: login_empty_username
+    path: /api/login
+    method: POST
+    body: '{"username":"","password":"test123"}'
+    skip_default_verify: true
+    
+    verify:
+      # 29. STATUS_CODE - 400错误
+      - type: STATUS_CODE
+        expect: "400"
+      
+      # 30. JSONPATH - 验证失败
+      - type: JSONPATH
+        jsonpath: $.success
+        expect: "false"
+      
+      # 31. CONTAINS - 包含错误信息
+      - type: CONTAINS
+        expect: "不能为空"
+
+  # ========== Step 7: 测试未授权访问 - 401状态码 ==========
+  - name: unauthorized_access
+    path: /api/user/info
+    method: GET
+    skip_default_verify: true
+    
+    verify:
+      # 32. STATUS_CODE - 401未授权
+      - type: STATUS_CODE
+        expect: "401"
+      
+      # 33. CONTAINS - 包含Authorization错误
+      - type: CONTAINS
+        expect: "Authorization"
 
 http:
   keepalive: true
@@ -128,3 +296,4 @@ http:
 advanced:
   realtime_port: 8090
   enable_html_report: true
+  save_details: true

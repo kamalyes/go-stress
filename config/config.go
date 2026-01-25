@@ -53,6 +53,9 @@ type Config struct {
 
 	// 验证配置
 	Verify *VerifyConfig `json:"verify,omitempty" yaml:"verify,omitempty"`
+
+	// 运行模式标识（用于报告展示）
+	RunMode RunMode `json:"run_mode,omitempty" yaml:"run_mode,omitempty"` // cli 或 config
 }
 
 // APIConfig 单个API配置（可继承公共配置）

@@ -18,9 +18,9 @@ import (
 
 	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/logger"
-	"github.com/kamalyes/go-stress/protocol"
 	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-stress/types"
+	"github.com/kamalyes/go-stress/verify"
 )
 
 // WorkerDependencyContext 每个 worker 的本地依赖上下文
@@ -686,8 +686,8 @@ func (w *Worker) executeVerifications(apiCfg *APIRequestConfig, resp *types.Resp
 			verifyConfig.JSONPath = replaceVars(verifyConfig.JSONPath, w.depContext.extractedVars)
 		}
 
-		// 直接创建HTTP验证器
-		httpVerifier := protocol.NewHTTPVerifier(&verifyConfig)
+		// 直接创建HTTP验证器（使用 verify 模块）
+		httpVerifier := verify.NewHTTPVerifier(&verifyConfig)
 
 		// 执行验证
 		isValid, verifyErr := httpVerifier.Verify(resp)

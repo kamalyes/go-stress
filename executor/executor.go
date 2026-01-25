@@ -70,6 +70,11 @@ func NewExecutorWithSQLiteStorage(cfg *config.Config, dbPath string) (*Executor,
 // newExecutor 内部构造函数（通用逻辑）
 func newExecutor(cfg *config.Config, collector *statistics.Collector) (*Executor, error) {
 
+	// 设置运行模式
+	if cfg.RunMode != "" {
+		collector.SetRunMode(cfg.RunMode.String())
+	}
+
 	// 1. 创建客户端工厂
 	clientFactory := createClientFactory(cfg)
 
@@ -169,7 +174,7 @@ func buildMiddlewareChain(cfg *config.Config, factory ClientFactory) (RequestHan
 
 	// 3. 验证中间件
 	if cfg.Verify != nil && cfg.Verify.Type != "" {
-		verifier, err := verify.Get(types.VerifyType(cfg.Verify.Type))
+		verifier, err := verify.Get(types.VerifyType(cfg.Verify.Type), cfg.Verify)
 		if err != nil {
 			return nil, fmt.Errorf("获取验证器失败: %w", err)
 		}
@@ -256,6 +261,11 @@ func (e *Executor) printStartInfo() {
 // GetCollector 获取统计收集器
 func (e *Executor) GetCollector() *statistics.Collector {
 	return e.collector
+}
+
+// GetRealtimeServer 获取实时报告服务器
+func (e *Executor) GetRealtimeServer() *statistics.RealtimeServer {
+	return e.realtimeServer
 }
 
 // SetStatsReporter 设置统计上报器（用于分布式模式）
