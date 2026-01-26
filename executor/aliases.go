@@ -2,8 +2,8 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 13:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2025-12-30 13:00:00
- * @FilePath: \go-stress\executor\alias.go
+ * @LastEditTime: 2026-01-26 10:36:08
+ * @FilePath: \go-stress\executor\aliases.go
  * @Description: executor 模块类型别名
  *
  * Copyright (c) 2025 by kamalyes, All Rights Reserved.
@@ -31,6 +31,15 @@ type (
 	// 统计相关
 	RequestResult = types.RequestResult
 	ExtractorType = types.ExtractorType
+
+	// 存储相关
+	StorageMode = types.StorageMode
+
+	// 验证相关
+	VerifyType = types.VerifyType
+
+	// 验证结果
+	VerificationResult = types.VerificationResult
 )
 
 // 常量别名
@@ -42,4 +51,9 @@ const (
 	ExtractorTypeJSONPath = types.ExtractorTypeJSONPath
 	ExtractorTypeRegex    = types.ExtractorTypeRegex
 	ExtractorTypeHeader   = types.ExtractorTypeHeader
+
+	// 存储模式
+	StorageModeMemory = types.StorageModeMemory
+	StorageModeSQLite = types.StorageModeSQLite
+	StorageModeBadger = types.StorageModeBadger
 )

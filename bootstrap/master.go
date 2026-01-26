@@ -23,7 +23,6 @@ import (
 	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/distributed/common"
 	"github.com/kamalyes/go-stress/distributed/master"
-	"github.com/kamalyes/go-stress/types"
 )
 
 // MasterOptions Master 启动选项
@@ -256,7 +255,7 @@ func loadTaskFromCurlFile(curlFile string, opts MasterOptions) (*common.Task, er
 // buildTaskFromFlags 从命令行参数构建任务
 func buildTaskFromFlags(opts MasterOptions) *common.Task {
 	cfg := &config.Config{
-		Protocol:    types.ProtocolHTTP,
+		Protocol:    ProtocolHTTP,
 		URL:         opts.URL,
 		Concurrency: opts.Concurrency,
 		Requests:    opts.Requests,

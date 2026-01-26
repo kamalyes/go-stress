@@ -20,7 +20,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/types"
 )
 
 // WebSocketClient WebSocket 客户端
@@ -33,7 +32,7 @@ type WebSocketClient struct {
 }
 
 // NewWebSocketClient 创建 WebSocket 客户端
-func NewWebSocketClient(cfg *config.Config) (types.Client, error) {
+func NewWebSocketClient(cfg *config.Config) (Client, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config cannot be nil")
 	}
@@ -47,11 +46,12 @@ func NewWebSocketClient(cfg *config.Config) (types.Client, error) {
 	// WebSocket URL 必须是 ws:// 或 wss://
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		// 自动转换 http/https 为 ws/wss
-		if u.Scheme == "http" {
+		switch u.Scheme {
+		case "http":
 			u.Scheme = "ws"
-		} else if u.Scheme == "https" {
+		case "https":
 			u.Scheme = "wss"
-		} else {
+		default:
 			return nil, fmt.Errorf("invalid websocket scheme: %s (expected ws or wss)", u.Scheme)
 		}
 		cfg.URL = u.String()
@@ -100,7 +100,7 @@ func (c *WebSocketClient) Connect(ctx context.Context) error {
 }
 
 // Send 发送 WebSocket 请求
-func (c *WebSocketClient) Send(ctx context.Context, req *types.Request) (*types.Response, error) {
+func (c *WebSocketClient) Send(ctx context.Context, req *Request) (*Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -155,7 +155,7 @@ func (c *WebSocketClient) Send(ctx context.Context, req *types.Request) (*types.
 			}
 
 			// 返回成功响应，表示连接已正常处理
-			return &types.Response{
+			return &Response{
 				StatusCode:     200,
 				Body:           []byte{},
 				Duration:       duration,
@@ -185,7 +185,7 @@ func (c *WebSocketClient) Send(ctx context.Context, req *types.Request) (*types.
 	}
 
 	// 构造响应
-	response := &types.Response{
+	response := &Response{
 		StatusCode:     200, // WebSocket 成功时状态码固定为 200
 		Body:           respBody,
 		Duration:       duration,
@@ -199,8 +199,8 @@ func (c *WebSocketClient) Send(ctx context.Context, req *types.Request) (*types.
 }
 
 // Type 返回协议类型
-func (c *WebSocketClient) Type() types.ProtocolType {
-	return types.ProtocolWebSocket
+func (c *WebSocketClient) Type() ProtocolType {
+	return ProtocolWebSocket
 }
 
 // Close 关闭客户端连接

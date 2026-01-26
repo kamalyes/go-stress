@@ -74,12 +74,14 @@ graph TB
 |:-----|:-----|:-----|
 | 🚀 **多协议支持** | HTTP/1.1, HTTP/2, gRPC, WebSocket | [→ 配置文档](docs/CONFIG_FILE.md) |
 | 🔄 **变量系统** | 60+ 内置函数：随机值、时间戳、加密、字符串处理等 | [→ 变量函数](docs/VARIABLES.md) |
-| 🌐 **分布式压测** | Master/Slave 架构支持大规模分布式场景 | [→ 分布式模式](docs/DISTRIBUTED_MODE.md) |
-| 📊 **实时监控** | Web 实时监控 + HTML 静态报告 | [→ 报告文档](docs/STORAGE_REPORT.md) |
+| 🌐 **分布式压测** | Master/Slave 架构，支持区域选择、节点过滤、任务重试 | [→ 分布式模式](docs/DISTRIBUTED_MODE.md) |
+| 📊 **实时监控** | Web 实时监控 + 跨节点数据查询 + HTML 静态报告 | [→ 报告文档](docs/STORAGE_REPORT.md) |
 | 🔧 **灵活配置** | 命令行、YAML/JSON、curl 文件多种配置方式 | [→ CLI 参考](docs/CLI_REFERENCE.md) · [→ 快速开始](docs/GETTING_STARTED.md) |
 | 🔌 **中间件架构** | 熔断、重试、验证等可插拔中间件 | [→ 配置文档](docs/CONFIG_FILE.md#中间件配置) |
-| 💾 **双存储模式** | 内存模式(高速) / SQLite(持久化) | [→ 存储模式](docs/STORAGE_REPORT.md) |
+| 💾 **双存储模式** | 内存模式(高速) / SQLite(持久化)，支持节点/任务数据隔离 | [→ 存储模式](docs/STORAGE_REPORT.md) |
 | 📈 **渐进启动** | Ramp-up 模式平滑增加负载 | [→ 高级配置](docs/CONFIG_FILE.md#高级配置) |
+| 🔁 **任务重试** | 失败/完成任务可一键重试，保留原配置创建新任务 | [→ 分布式模式](docs/DISTRIBUTED_MODE.md#任务重试) |
+| 🧪 **测试服务器** | 内置 WebSocket 测试服务器，支持 ping/echo/chat 模式 | [→ testserver](testserver/README.md) |
 
 ## 📦 快速开始
 
@@ -130,29 +132,34 @@ go build -o go-stress .
 
 # 2. 启动 Slave 节点 - 在不同机器/区域运行
 # 北京机房
-./go-stress -mode slave -master master-ip:9090 -region beijing -slave-id slave-bj-1
+./go-stress -mode slave -master master-ip:9090 -region beijing -slave-id slave-bj-1 -realtime-port 8088
 
 # 上海机房
-./go-stress -mode slave -master master-ip:9090 -region shanghai -slave-id slave-sh-1
-
-
-# 广州机房（192.168.1.103）
-./go-stress -mode slave -master master-ip:9090 -region guangzhou -slave-id slave-gz-1
+./go-stress -mode slave -master master-ip:9090 -region shanghai -slave-id slave-sh-1 -realtime-port 8089
 
 # 3. 访问管理界面创建和启动任务
 # http://master-ip:8080
-#   - 创建任务（上传配置文件或粘贴 JSON）
-#   - 点击"启动任务"按钮
-#   - 选择要使用的 Slave 节点或区域
-#   - 查看实时执行情况和详细数据
+#   - 📝 创建任务（上传配置文件或在线编辑 YAML）
+#   - ▶️  启动任务，支持 3 种 Slave 选择策略：
+#     • 全部节点（默认）
+#     • 指定节点（勾选特定 Slave）
+#     • 按区域选择（如 beijing, shanghai）
+#   - 📊 查看实时执行情况（支持跨 Slave 数据查询）
+#   - 🔁 任务失败/完成后可一键重试
 ```
 
 **工作流程**：
-
-1. **创建任务** - 提交配置，任务状态为"待执行"
-2. **启动任务** - 手动启动，可选择特定 Slave 或区域
+1. **创建任务** - 提交配置，任务状态为 `pending`
+2. **启动任务** - 手动启动，选择 Slave 策略（all/specific/region）
 3. **执行压测** - 所有选定的 Slave 并行执行
-4. **查看结果** - 实时监控和详情数据查询
+4. **查看结果** - 实时监控 + 每个 Slave 独立报告
+5. **任务重试** - 失败/完成任务可重试，自动创建新任务副本
+
+**🆕 自动化测试脚本**：
+```powershell
+# 一键启动本地分布式环境（1 Master + 3 Slaves）
+.\test-distributed.ps1
+```
 
 **📖 [分布式压测完整指南 →](docs/DISTRIBUTED_MODE.md)**
 
@@ -204,25 +211,65 @@ realtime:
 ### 🌐 WebSocket 压测
 
 ```bash
-# 命令行方式
+# 1️⃣ 启动测试服务器（内置 WebSocket 服务）
+cd testserver
+go run test_server.go
+# 提供 3 个端点：
+#   ws://localhost:3000/ws        (通用服务: ping/echo/info)
+#   ws://localhost:3000/ws/echo   (回声服务器)
+#   ws://localhost:3000/ws/chat   (聊天室模拟)
+
+# 2️⃣ 运行压测 - 命令行方式
 ./go-stress -protocol websocket \
-  -url ws://localhost:8080/ws \
-  -body '{"action":"ping","data":"test"}' \
+  -url ws://localhost:3000/ws \
+  -body '{"action":"ping","message_id":1}' \
   -c 50 -n 1000
 
-# 配置文件方式
-# config.yaml:
+# 3️⃣ 配置文件方式（推荐）
+# 快速测试 (5并发 20请求)
+./go-stress -config testserver/websocket-quick.yaml
+
+# 通用服务 (10并发 100请求)
+./go-stress -config testserver/websocket-test.yaml
+
+# 回声服务 (20并发 500请求)
+./go-stress -config testserver/websocket-echo.yaml
+
+# 聊天室压测 (50并发 1000请求)
+./go-stress -config testserver/websocket-chat.yaml
+
+# 🆕 一键测试脚本
+.\test-websocket.ps1  # 自动启动服务器并运行压测
+```
+
+**配置示例** (`websocket-test.yaml`):
+```yaml
 protocol: websocket
-url: ws://localhost:8080/ws
+url: ws://localhost:3000/ws
+method: POST
+concurrency: 10
+requests: 100
+timeout: 10s
+
 body: |
   {
+    "action": "echo",
     "message_id": {{seq}},
-    "action": "chat",
-    "user_id": {{randomInt 1000 9999}},
-    "content": "Message {{seq}}"
+    "data": {
+      "content": "测试消息 {{seq}}",
+      "user_id": "user_{{randomInt 1000 9999}}",
+      "timestamp": {{unix}}
+    }
   }
-concurrency: 50
-requests: 1000
+
+advanced:
+  enable_retry: true
+  max_retry: 2
+  ramp_up: 5s
+
+realtime:
+  enabled: true
+  port: 8088
 ```
 
 **📖 [配置文件完整说明 →](docs/CONFIG_FILE.md)**
@@ -255,7 +302,6 @@ requests: 1000
 | 🔒 | security | 安全修复 |
 | 🔥 | remove | 删除代码 |
 **示例：** `git commit -m "✨ feat(executor): 新增中间件链支持"`
-
 </details>
 
 ## 📄 许可证

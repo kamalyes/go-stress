@@ -14,14 +14,13 @@ import (
 	"fmt"
 
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/types"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
 // Verifier 验证器接口
 type Verifier interface {
 	// Verify 验证响应
-	Verify(resp *types.Response) (bool, error)
+	Verify(resp *Response) (bool, error)
 }
 
 // VerifierFactory 验证器工厂函数
@@ -30,23 +29,23 @@ type VerifierFactory func(cfg *config.VerifyConfig) Verifier
 // Registry 验证器注册中心
 type Registry struct {
 	mu        *syncx.RWLock
-	factories map[types.VerifyType]VerifierFactory
+	factories map[VerifyType]VerifierFactory
 }
 
 var globalRegistry = &Registry{
 	mu:        syncx.NewRWLock(),
-	factories: make(map[types.VerifyType]VerifierFactory),
+	factories: make(map[VerifyType]VerifierFactory),
 }
 
 // Register 注册验证器工厂
-func Register(vType types.VerifyType, factory VerifierFactory) {
+func Register(vType VerifyType, factory VerifierFactory) {
 	globalRegistry.mu.Lock()
 	defer globalRegistry.mu.Unlock()
 	globalRegistry.factories[vType] = factory
 }
 
 // Get 获取验证器（通过工厂创建）
-func Get(vType types.VerifyType, cfg *config.VerifyConfig) (Verifier, error) {
+func Get(vType VerifyType, cfg *config.VerifyConfig) (Verifier, error) {
 	globalRegistry.mu.RLock()
 	defer globalRegistry.mu.RUnlock()
 
@@ -60,26 +59,26 @@ func Get(vType types.VerifyType, cfg *config.VerifyConfig) (Verifier, error) {
 // init 自动注册所有支持的验证器类型
 func init() {
 	// 注册所有验证类型的工厂函数
-	verifyTypes := []types.VerifyType{
-		types.VerifyTypeStatusCode,
-		types.VerifyTypeJSONPath,
-		types.VerifyTypeContains,
-		types.VerifyTypeRegex,
-		types.VerifyTypeJSONSchema,
-		types.VerifyTypeJSONValid,
-		types.VerifyTypeHeader,
-		types.VerifyTypeResponseTime,
-		types.VerifyTypeResponseSize,
-		types.VerifyTypeEmail,
-		types.VerifyTypeIP,
-		types.VerifyTypeURL,
-		types.VerifyTypeUUID,
-		types.VerifyTypeBase64,
-		types.VerifyTypeLength,
-		types.VerifyTypePrefix,
-		types.VerifyTypeSuffix,
-		types.VerifyTypeEmpty,
-		types.VerifyTypeNotEmpty,
+	verifyTypes := []VerifyType{
+		VerifyTypeStatusCode,
+		VerifyTypeJSONPath,
+		VerifyTypeContains,
+		VerifyTypeRegex,
+		VerifyTypeJSONSchema,
+		VerifyTypeJSONValid,
+		VerifyTypeHeader,
+		VerifyTypeResponseTime,
+		VerifyTypeResponseSize,
+		VerifyTypeEmail,
+		VerifyTypeIP,
+		VerifyTypeURL,
+		VerifyTypeUUID,
+		VerifyTypeBase64,
+		VerifyTypeLength,
+		VerifyTypePrefix,
+		VerifyTypeSuffix,
+		VerifyTypeEmpty,
+		VerifyTypeNotEmpty,
 	}
 
 	// 所有类型都使用 HTTPVerifier

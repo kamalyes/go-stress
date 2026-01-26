@@ -22,7 +22,6 @@ import (
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/protocol"
 	"github.com/kamalyes/go-stress/statistics"
-	"github.com/kamalyes/go-stress/types"
 	"github.com/kamalyes/go-stress/verify"
 	"github.com/kamalyes/go-toolbox/pkg/breaker"
 	"github.com/kamalyes/go-toolbox/pkg/retry"
@@ -30,7 +29,7 @@ import (
 
 // StatsReporter 统计上报接口（用于分布式模式）
 type StatsReporter interface {
-	Add(result *types.RequestResult)
+	Add(result *RequestResult)
 	SetTaskID(taskID string)
 }
 
@@ -50,20 +49,26 @@ type Executor struct {
 	isDistributed bool          // 是否为分布式模式
 }
 
-// NewExecutor 创建执行器（默认内存模式）
-func NewExecutor(cfg *config.Config) (*Executor, error) {
-	return NewExecutorWithMemoryStorage(cfg)
-}
+// NewExecutor 根据存储模式创建执行器（使用存储工厂）
+func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string) (*Executor, error) {
+	// 使用存储工厂创建存储
+	factory := statistics.NewStorageFactory(logger.Default)
 
-// NewExecutorWithMemoryStorage 创建内存存储模式的执行器
-func NewExecutorWithMemoryStorage(cfg *config.Config) (*Executor, error) {
-	collector := statistics.NewCollectorWithMemoryStorage("local")
-	return newExecutor(cfg, collector)
-}
+	storageConfig := &statistics.StorageConfig{
+		Type:   storageMode,
+		Path:   storagePath,
+		NodeID: "local",
+	}
 
-// NewExecutorWithSQLiteStorage 创建 SQLite 存储模式的执行器
-func NewExecutorWithSQLiteStorage(cfg *config.Config, dbPath string) (*Executor, error) {
-	collector := statistics.NewCollectorWithStorage(dbPath, "local")
+	storage, err := factory.CreateStorage(storageConfig)
+	if err != nil {
+		logger.Default.Errorf("❌ 创建存储失败: %v，降级为内存模式", err)
+		storage = statistics.NewMemoryStorage("local", logger.Default)
+	}
+
+	// 创建 Collector
+	collector := statistics.NewCollectorWithStorageInterface(storage)
+
 	return newExecutor(cfg, collector)
 }
 
@@ -138,14 +143,14 @@ func newExecutor(cfg *config.Config, collector *statistics.Collector) (*Executor
 
 // createClientFactory 创建客户端工厂
 func createClientFactory(cfg *config.Config) ClientFactory {
-	return func() (types.Client, error) {
+	return func() (Client, error) {
 		logger.Default.Infof("创建客户端: protocol=%s (type=%T)", cfg.Protocol, cfg.Protocol)
 		switch cfg.Protocol {
-		case types.ProtocolHTTP:
+		case ProtocolHTTP:
 			return protocol.NewHTTPClient(cfg)
-		case types.ProtocolGRPC:
+		case ProtocolGRPC:
 			return protocol.NewGRPCClient(cfg)
-		case types.ProtocolWebSocket:
+		case ProtocolWebSocket:
 			return protocol.NewWebSocketClient(cfg)
 		default:
 			return nil, fmt.Errorf("不支持的协议: %s (type=%T, raw=%q)", cfg.Protocol, cfg.Protocol, string(cfg.Protocol))
@@ -182,7 +187,7 @@ func buildMiddlewareChain(cfg *config.Config, factory ClientFactory) (RequestHan
 
 	// 3. 验证中间件
 	if cfg.Verify != nil && cfg.Verify.Type != "" {
-		verifier, err := verify.Get(types.VerifyType(cfg.Verify.Type), cfg.Verify)
+		verifier, err := verify.Get(VerifyType(cfg.Verify.Type), cfg.Verify)
 		if err != nil {
 			return nil, fmt.Errorf("获取验证器失败: %w", err)
 		}
@@ -295,7 +300,7 @@ func (e *Executor) SetStatsReporter(reporter StatsReporter) {
 	e.isDistributed = true
 	// 在分布式模式下，同时将结果发送到本地收集器和远程上报器
 	if reporter != nil {
-		e.collector.SetExternalReporter(func(result *types.RequestResult) {
+		e.collector.SetExternalReporter(func(result *RequestResult) {
 			reporter.Add(result)
 		})
 	}

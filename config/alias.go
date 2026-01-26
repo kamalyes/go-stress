@@ -3,7 +3,7 @@
  * @Date: 2025-12-30 17:00:00
  * @LastEditors: kamalyes 501893067@qq.com
  * @LastEditTime: 2025-12-30 17:00:00
- * @FilePath: \go-stress\config\alias.go
+ * @FilePath: \go-stress\config\aliases.go
  * @Description: config 模块类型别名
  *
  * Copyright (c) 2025 by kamalyes, All Rights Reserved.

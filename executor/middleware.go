@@ -14,7 +14,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kamalyes/go-stress/types"
 	"github.com/kamalyes/go-stress/verify"
 	"github.com/kamalyes/go-toolbox/pkg/breaker"
 	"github.com/kamalyes/go-toolbox/pkg/retry"
@@ -51,7 +50,7 @@ func (mc *MiddlewareChain) Build(handler RequestHandler) RequestHandler {
 func BreakerMiddleware(circuit *breaker.Circuit) Middleware {
 	return func(next RequestHandler) RequestHandler {
 		return func(ctx context.Context, req *Request) (*Response, error) {
-			var resp *types.Response
+			var resp *Response
 			var err error
 
 			breakerErr := circuit.Execute(func() error {
@@ -71,8 +70,8 @@ func BreakerMiddleware(circuit *breaker.Circuit) Middleware {
 // RetryMiddleware 重试中间件
 func RetryMiddleware(retrier *retry.Runner[error]) Middleware {
 	return func(next RequestHandler) RequestHandler {
-		return func(ctx context.Context, req *types.Request) (*types.Response, error) {
-			var resp *types.Response
+		return func(ctx context.Context, req *Request) (*Response, error) {
+			var resp *Response
 			var err error
 
 			_, retryErr := retrier.Run(func(retryCtx context.Context) (error, error) {
@@ -92,7 +91,7 @@ func RetryMiddleware(retrier *retry.Runner[error]) Middleware {
 // VerifyMiddleware 验证中间件
 func VerifyMiddleware(verifier verify.Verifier) Middleware {
 	return func(next RequestHandler) RequestHandler {
-		return func(ctx context.Context, req *types.Request) (*types.Response, error) {
+		return func(ctx context.Context, req *Request) (*Response, error) {
 			resp, err := next(ctx, req)
 			if err != nil {
 				return resp, err
@@ -112,8 +111,8 @@ func VerifyMiddleware(verifier verify.Verifier) Middleware {
 }
 
 // ClientMiddleware 客户端执行中间件（最底层）
-func ClientMiddleware(client types.Client) RequestHandler {
-	return func(ctx context.Context, req *types.Request) (*types.Response, error) {
+func ClientMiddleware(client Client) RequestHandler {
+	return func(ctx context.Context, req *Request) (*Response, error) {
 		return client.Send(ctx, req)
 	}
 }

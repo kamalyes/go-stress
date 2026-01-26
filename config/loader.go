@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kamalyes/go-stress/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -201,7 +200,7 @@ func (l *Loader) validate(config *Config) error {
 
 	// 协议特定验证
 	switch config.Protocol {
-	case types.ProtocolGRPC:
+	case ProtocolGRPC:
 		if config.GRPC == nil {
 			return fmt.Errorf("gRPC配置不能为空")
 		}

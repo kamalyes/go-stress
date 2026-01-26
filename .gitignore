@@ -80,4 +80,3 @@ bin/
 # Test cache
 .cache/
 **/stress-report/**
-*debug*

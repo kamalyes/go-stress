@@ -22,6 +22,28 @@ import (
 	"github.com/kamalyes/go-stress/types"
 )
 
+// 导出常量 - 存储模式
+const (
+	ExportStorageModeMemory = types.StorageModeMemory
+	ExportStorageModeSQLite = types.StorageModeSQLite
+	ExportStorageModeBadger = types.StorageModeBadger
+)
+
+// 导出常量 - 运行模式
+const (
+	ExportRunModeStandaloneCLI  = types.RunModeStandaloneCLI
+	ExportRunModeStandaloneFile = types.RunModeStandaloneFile
+	ExportRunModeMaster         = types.RunModeMaster
+	ExportRunModeSlave          = types.RunModeSlave
+)
+
+// 导出常量 - 协议类型
+const (
+	ExportProtocolHTTP      = types.ProtocolHTTP
+	ExportProtocolGRPC      = types.ProtocolGRPC
+	ExportProtocolWebSocket = types.ProtocolWebSocket
+)
+
 var (
 	// 基础参数
 	configFile  string
@@ -95,8 +117,8 @@ func (a *arrayFlags) Set(value string) error {
 
 func init() {
 	// 设置默认值
-	storageMode = types.StorageModeMemory
-	mode = types.RunModeStandaloneCLI
+	storageMode = ExportStorageModeMemory
+	mode = ExportRunModeStandaloneCLI
 
 	// 基础参数
 	flag.StringVar(&configFile, "config", "", "配置文件路径 (yaml/json)")
@@ -129,7 +151,7 @@ func init() {
 
 	// 报告配置
 	flag.StringVar(&reportPrefix, "report-prefix", "stress-report", "报告文件名前缀")
-	flag.Var(&storageMode, "storage", "存储模式 (memory:内存模式 | sqlite:持久化到SQLite文件)")
+	flag.Var(&storageMode, "storage", "存储模式 (memory:内存 | sqlite:SQLite数据库 | badger:BadgerDB高性能存储)")
 
 	// 内存限制
 	flag.StringVar(&maxMemory, "max-memory", "", "内存使用阈值，超过后自动停止测试 (如: 1GB, 512MB, 2048KB)")
@@ -195,9 +217,9 @@ func main() {
 
 	// 根据运行模式选择执行路径
 	switch mode {
-	case types.RunModeMaster:
+	case ExportRunModeMaster:
 		runMasterMode()
-	case types.RunModeSlave:
+	case ExportRunModeSlave:
 		runSlaveMode()
 	default:
 		runStandaloneMode()
@@ -223,7 +245,7 @@ func buildConfigFromFlags() *config.Config {
 	}
 
 	// HTTP配置
-	if cfg.Protocol == types.ProtocolHTTP {
+	if cfg.Protocol == ExportProtocolHTTP {
 		cfg.HTTP = &config.HTTPConfig{
 			HTTP2:           http2,
 			KeepAlive:       keepalive,
@@ -233,7 +255,7 @@ func buildConfigFromFlags() *config.Config {
 	}
 
 	// gRPC配置
-	if cfg.Protocol == types.ProtocolGRPC {
+	if cfg.Protocol == ExportProtocolGRPC {
 		cfg.GRPC = &config.GRPCConfig{
 			UseReflection: grpcReflection,
 			Service:       grpcService,

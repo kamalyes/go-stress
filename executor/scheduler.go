@@ -18,7 +18,6 @@ import (
 	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/statistics"
-	"github.com/kamalyes/go-stress/types"
 )
 
 // Scheduler Worker调度器
@@ -149,7 +148,7 @@ func (s *Scheduler) runWorker(ctx context.Context, workerID uint64) error {
 
 // wrapHandlerWithProgress 包装处理器以跟踪进度
 func (s *Scheduler) wrapHandlerWithProgress(handler RequestHandler) RequestHandler {
-	return func(ctx context.Context, req *types.Request) (*types.Response, error) {
+	return func(ctx context.Context, req *Request) (*Response, error) {
 		resp, err := handler(ctx, req)
 		s.progress.Increment()
 		return resp, err

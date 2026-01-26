@@ -3,7 +3,7 @@
  * @Date: 2025-12-30 13:00:00
  * @LastEditors: kamalyes 501893067@qq.com
  * @LastEditTime: 2025-12-31 13:17:06
- * @FilePath: \go-stress\protocol\alias.go
+ * @FilePath: \go-stress\protocol\aliases.go
  * @Description: protocol 模块类型别名
  *
  * Copyright (c) 2025 by kamalyes, All Rights Reserved.

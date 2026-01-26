@@ -12,8 +12,6 @@ package executor
 
 import (
 	"time"
-
-	"github.com/kamalyes/go-stress/types"
 )
 
 // RequestBuilder 请求构建器
@@ -35,8 +33,8 @@ func NewRequestBuilder(url, method string, headers map[string]string, body strin
 }
 
 // Build 构建请求
-func (rb *RequestBuilder) Build() *types.Request {
-	return &types.Request{
+func (rb *RequestBuilder) Build() *Request {
+	return &Request{
 		URL:     rb.url,
 		Method:  rb.method,
 		Headers: rb.headers,
@@ -45,8 +43,8 @@ func (rb *RequestBuilder) Build() *types.Request {
 }
 
 // BuildRequestResult 构建请求结果
-func BuildRequestResult(resp *types.Response, err error) *types.RequestResult {
-	result := &types.RequestResult{
+func BuildRequestResult(resp *Response, err error) *RequestResult {
+	result := &RequestResult{
 		Success:   err == nil,
 		Timestamp: time.Now(),
 		Error:     err,

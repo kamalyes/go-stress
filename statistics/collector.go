@@ -62,40 +62,8 @@ type Collector struct {
 	closed *syncx.Bool
 }
 
-// NewCollector 创建收集器（默认内存模式）
-func NewCollector() *Collector {
-	return NewCollectorWithMemoryStorage("local")
-}
-
-// NewCollectorWithMemoryStorage 创建内存存储收集器
-func NewCollectorWithMemoryStorage(nodeID string) *Collector {
-	storage := NewMemoryStorage(nodeID, logger.Default)
-
-	return &Collector{
-		totalRequests:   syncx.NewUint64(0),
-		successRequests: syncx.NewUint64(0),
-		failedRequests:  syncx.NewUint64(0),
-		skippedRequests: syncx.NewUint64(0),
-		mu:              syncx.NewRWLock(),
-		reporterMu:      syncx.NewRWLock(),
-		durations:       make([]float64, 0, 10000),
-		errors:          syncx.NewMap[string, uint64](),
-		statusCodes:     syncx.NewMap[int, uint64](),
-		storage:         storage,
-		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
-		minDuration:     time.Hour,
-		closed:          syncx.NewBool(false),
-	}
-}
-
-// NewCollectorWithStorage 创建带 SQLite 存储的收集器
-func NewCollectorWithStorage(dbPath, nodeID string) *Collector {
-	storage, err := NewDetailStorage(dbPath, nodeID, logger.Default)
-	if err != nil {
-		logger.Default.Errorf("❌ 创建 SQLite 存储失败: %v，降级为内存模式", err)
-		return NewCollectorWithMemoryStorage(nodeID)
-	}
-
+// NewCollectorWithStorageInterface 使用已创建的存储接口创建收集器（工厂模式）
+func NewCollectorWithStorageInterface(storage DetailStorageInterface) *Collector {
 	return &Collector{
 		totalRequests:   syncx.NewUint64(0),
 		successRequests: syncx.NewUint64(0),

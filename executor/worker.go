@@ -19,7 +19,6 @@ import (
 	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/statistics"
-	"github.com/kamalyes/go-stress/types"
 	"github.com/kamalyes/go-stress/verify"
 )
 
@@ -53,7 +52,7 @@ func NewWorkerDependencyContext() *WorkerDependencyContext {
 // Worker 工作单元
 type Worker struct {
 	id          uint64
-	client      types.Client
+	client      Client
 	handler     RequestHandler
 	collector   *statistics.Collector
 	reqCount    uint64
@@ -67,7 +66,7 @@ type Worker struct {
 // WorkerConfig Worker配置
 type WorkerConfig struct {
 	ID          uint64
-	Client      types.Client
+	Client      Client
 	Handler     RequestHandler
 	Collector   *statistics.Collector
 	ReqCount    uint64
@@ -203,7 +202,7 @@ func (w *Worker) Run(ctx context.Context) error {
 // executeRequest 执行单次请求
 func (w *Worker) executeRequest(ctx context.Context) {
 	// 构建请求
-	var req *types.Request
+	var req *Request
 	var apiCfg *APIRequestConfig
 
 	if w.apiSelector != nil {
@@ -225,7 +224,7 @@ func (w *Worker) executeRequest(ctx context.Context) {
 			skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
 
 			// 跳过该API，记录完整配置但标记为跳过
-			result := &types.RequestResult{
+			result := &RequestResult{
 				Success:    false,
 				Skipped:    true,
 				SkipReason: skipReason,
@@ -360,7 +359,7 @@ func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resol
 		skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
 
 		// 跳过该API，记录完整配置但标记为跳过
-		result := &types.RequestResult{
+		result := &RequestResult{
 			Success:    false,
 			Skipped:    true,
 			SkipReason: skipReason,
@@ -481,7 +480,7 @@ func (w *Worker) resolveAPIConfigVariables(apiCfg *APIRequestConfig) *APIRequest
 }
 
 // resolveRequestVariables 解析请求中的动态变量
-func (w *Worker) resolveRequestVariables(req *types.Request) *types.Request {
+func (w *Worker) resolveRequestVariables(req *Request) *Request {
 	if req == nil || w.varResolver == nil {
 		return req
 	}
@@ -602,14 +601,14 @@ func (w *Worker) getFailedDependencies(apiName string) []string {
 }
 
 // buildPlannedVerifications 构建计划的验证规则（虽未执行，但记录配置）
-func (w *Worker) buildPlannedVerifications(apiCfg *APIRequestConfig) []types.VerificationResult {
+func (w *Worker) buildPlannedVerifications(apiCfg *APIRequestConfig) []VerificationResult {
 	if len(apiCfg.Verify) == 0 {
 		return nil
 	}
 
-	var verifications []types.VerificationResult
+	var verifications []VerificationResult
 	for _, v := range apiCfg.Verify {
-		verifications = append(verifications, types.VerificationResult{
+		verifications = append(verifications, VerificationResult{
 			Type:    v.Type,
 			Success: false, // 未执行
 			Skipped: true,  // 标记为跳过
@@ -632,7 +631,7 @@ func replaceVars(text string, vars map[string]string) string {
 }
 
 // extractAndStoreVarsLocal 提取响应数据并存储到本地上下文，并返回提取的原始变量
-func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, resp *types.Response) map[string]string {
+func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, resp *Response) map[string]string {
 	// 构建默认值映射
 	defaultValues := make(map[string]string)
 	for _, extCfg := range apiCfg.Extractors {
@@ -665,7 +664,7 @@ func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, resp *types.
 }
 
 // executeVerifications 执行API级别的验证
-func (w *Worker) executeVerifications(apiCfg *APIRequestConfig, resp *types.Response) error {
+func (w *Worker) executeVerifications(apiCfg *APIRequestConfig, resp *Response) error {
 	for _, verifyCfg := range apiCfg.Verify {
 		// 复制验证配置，以便修改而不影响原配置
 		verifyConfig := verifyCfg

@@ -37,7 +37,6 @@ import (
 type Slave struct {
 	config        *common.SlaveConfig
 	info          *common.SlaveInfo
-	executor      *executor.Executor
 	collector     *statistics.Collector // 持久化 Collector，用于查询历史数据
 	statsBuffer   *StatsBuffer
 	monitor       *ResourceMonitor
@@ -81,7 +80,7 @@ func NewSlave(config *common.SlaveConfig, log logger.ILogger) (*Slave, error) {
 	slave := &Slave{
 		config:        config,
 		info:          info,
-		collector:     statistics.NewCollectorWithMemoryStorage(config.SlaveID), // 创建持久化的 Collector
+		collector:     statistics.NewCollectorWithStorageInterface(statistics.NewMemoryStorage(config.SlaveID, log)), // 使用内存存储
 		statsBuffer:   NewStatsBuffer(config.SlaveID, config.ReportBuffer, log),
 		monitor:       NewResourceMonitor(log, 5*time.Second),
 		logger:        log,
@@ -157,13 +156,7 @@ func (s *Slave) Stop() error {
 		s.grpcServer.GracefulStop()
 	}
 
-	// 停止 Executor (无法直接停止，需要等待其自然完成或通过 context 取消)
-	// executor 通过 context 取消机制控制，cancelFunc 已调用
-	if s.executor != nil {
-		// executor 会在 context 取消后自动停止
-		s.logger.InfoMsg("Executor will stop via context cancellation")
-	}
-
+	// Executor 通过 context 取消机制自动停止，无需手动干预
 	s.logger.InfoMsg("Slave stopped")
 	return nil
 }
@@ -358,7 +351,7 @@ func (s *Slave) startGRPCServer() error {
 	return nil
 }
 
-// ExecuteTask 执行任务 - 使用 syncx.GoExecutor
+// ExecuteTask 执行任务 - 直接调用 executor.RunTask
 func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 	if s.currentTaskID != "" {
 		return fmt.Errorf("slave is already executing task: %s", s.currentTaskID)
@@ -389,49 +382,46 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 	}
 	cfg.Advanced.RealtimePort = s.config.RealtimePort
 
-	// 创建 Executor，但不使用它的 Collector
-	executor, err := executor.NewExecutor(&cfg)
-	if err != nil {
-		return fmt.Errorf("failed to create executor: %w", err)
-	}
-
-	// 替换 Executor 的 Collector 为 Slave 的持久化 Collector
-	executor.ReplaceCollector(s.collector)
-
-	// 设置外部上报器 - 传递 Add 方法作为回调
-	s.collector.SetExternalReporter(s.statsBuffer.Add)
-	s.executor = executor
-
 	// 创建可取消的 context
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelFunc = cancel
 
-	// 使用 syncx.GoExecutor 在后台运行 Executor
+	// 设置外部上报器 - 传递 Add 方法作为回调
+	s.collector.SetExternalReporter(s.statsBuffer.Add)
+
+	// 使用 syncx.GoExecutor 在后台运行任务
 	syncx.Go().
 		OnError(func(err error) {
-			// 如果是用户中断（context canceled），不视为错误
-			if err.Error() == "执行压测失败: context canceled" ||
-				err.Error() == "context canceled" {
-				s.logger.Warn("⚠️  压测已被用户中断")
-			} else {
-				s.logger.ErrorKV("Executor failed", "error", err)
+			if err != nil {
+				s.logger.ErrorKV("Task execution failed", "error", err)
 			}
 			s.info.State = common.SlaveStateError
 			s.currentTaskID = ""
 			s.cancelFunc = nil
 		}).
 		OnPanic(func(r interface{}) {
-			s.logger.ErrorKV("Executor panicked", "panic", r)
+			s.logger.ErrorKV("Task execution panicked", "panic", r)
 			s.info.State = common.SlaveStateError
 			s.currentTaskID = ""
 			s.cancelFunc = nil
 		}).
 		ExecWithContext(func(execCtx context.Context) error {
-			_, err := s.executor.Run(ctx)
+			// 🔥 直接调用 executor.RunTask
+			result := executor.RunTask(executor.RunOptions{
+				ConfigFunc:        func() *config.Config { return &cfg },
+				Logger:            s.logger,
+				StorageMode:       executor.StorageModeMemory, // Slave 使用内存模式
+				IsDistributed:     true,                       // 分布式模式
+				ExternalContext:   ctx,                        // 可取消的 context
+				ExternalCollector: s.collector,                // 使用 Slave 的 Collector
+				NoReport:          true,                       // 不生成报告文件
+				NoPrint:           true,                       // 不打印报告
+				NoWait:            true,                       // 不等待退出
+			})
 
 			// 任务完成后通知 Master
-			success := err == nil
-			s.reportTaskCompletion(taskConfig.TaskID, success, err)
+			success := result.Error == nil
+			s.reportTaskCompletion(taskConfig.TaskID, success, result.Error)
 
 			// 清理并更新状态
 			s.currentTaskID = ""
@@ -449,7 +439,7 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 			}
 
 			s.logger.InfoKV("Task execution completed", "task_id", taskConfig.TaskID, "success", success)
-			return err
+			return result.Error
 		})
 
 	return nil
@@ -467,11 +457,6 @@ func (s *Slave) StopTask(taskID string) error {
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 		s.cancelFunc = nil
-	}
-
-	// 停止 Executor
-	if s.executor != nil {
-		s.executor = nil
 	}
 
 	// 清理任务状态
