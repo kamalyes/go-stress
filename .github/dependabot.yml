@@ -67,10 +67,6 @@ updates:
       - "🤖 Dependencies"
     ignore:
       - dependency-name: "actions/checkout"
-        versions: ["*"]
       - dependency-name: "actions/upload-artifact"
-        versions: ["*"]
       - dependency-name: "codecov/codecov-action"
-        versions: ["*"]
       - dependency-name: "golangci/golangci-lint-action"
-        versions: ["*"]
