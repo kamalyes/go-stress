@@ -12,11 +12,13 @@ package master
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/kamalyes/go-logger"
+	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/distributed/common"
 	pb "github.com/kamalyes/go-stress/distributed/proto"
 	"github.com/kamalyes/go-toolbox/pkg/errorx"
@@ -165,6 +167,31 @@ func (m *Master) startGRPCServer() error {
 	}()
 
 	return nil
+}
+
+// SubmitConfig 提交配置（推荐使用，直接接受 config.Config）
+func (m *Master) SubmitConfig(cfg *config.Config) (string, error) {
+	// 序列化配置
+	configData, err := json.Marshal(cfg)
+	if err != nil {
+		return "", errorx.WrapError("failed to marshal config", err)
+	}
+
+	// 转换为 Task
+	task := &common.Task{
+		ID:           m.idGenerator.GenerateRequestID(),
+		Protocol:     string(cfg.Protocol),
+		Target:       cfg.URL,
+		TotalWorkers: int(cfg.Concurrency),
+		Duration:     int(cfg.Requests),
+		ConfigData:   configData,
+	}
+
+	if err := m.SubmitTask(task); err != nil {
+		return "", err
+	}
+
+	return task.ID, nil
 }
 
 // SubmitTask 提交任务（不立即执行,等待手动启动）

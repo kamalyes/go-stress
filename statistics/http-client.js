@@ -228,7 +228,7 @@ class HttpError extends Error {
 // 默认实例
 const httpClient = new HttpClient();
 
-// 便捷方法（兼容旧代码）
+// 便捷方法
 const http = {
     get: (url, options) => httpClient.get(url, options),
     post: (url, body, options) => httpClient.post(url, body, options),

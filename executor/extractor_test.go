@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/kamalyes/go-stress/config"
+	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -288,7 +289,7 @@ func TestExtractorManager_Integration(t *testing.T) {
 		},
 	}
 
-	manager, err := NewExtractorManager(configs)
+	manager, err := NewExtractorManager(configs, logger.New())
 	assert.NoError(t, err)
 
 	ctx := &ExtractorContext{
@@ -329,7 +330,7 @@ func TestExtractorManager_WithTransforms(t *testing.T) {
 		},
 	}
 
-	manager, err := NewExtractorManager(configs)
+	manager, err := NewExtractorManager(configs, logger.New())
 	assert.NoError(t, err)
 
 	ctx := &ExtractorContext{
@@ -355,7 +356,7 @@ func TestExtractorManager_DefaultValue(t *testing.T) {
 		},
 	}
 
-	manager, err := NewExtractorManager(configs)
+	manager, err := NewExtractorManager(configs, logger.New())
 	assert.NoError(t, err)
 
 	ctx := &ExtractorContext{

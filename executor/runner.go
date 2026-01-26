@@ -12,16 +12,13 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strings"
-	"syscall"
 	"time"
 
 	"github.com/kamalyes/go-logger"
-	slog "github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-toolbox/pkg/osx"
@@ -31,8 +28,8 @@ import (
 // RunOptions 任务执行选项（通用，支持独立模式和分布式模式）
 type RunOptions struct {
 	// === 配置来源（三选一） ===
-	ConfigFile string              // 配置文件路径
-	CurlFile   string              // curl 文件路径
+	ConfigFile string                // 配置文件路径
+	CurlFile   string                // curl 文件路径
 	ConfigFunc func() *config.Config // 从命令行构建配置的函数
 
 	// === 运行时参数 ===
@@ -64,13 +61,22 @@ type RunResult struct {
 	Error    error
 }
 
-// RunTask 执行压测任务（核心逻辑，供 standalone 和 distributed 复用）
+// RunTask 执行压测任务（使用策略模式，消除分支判断）
 func RunTask(opts RunOptions) *RunResult {
 	result := &RunResult{}
 
-	// 设置默认日志器
-	if opts.Logger == nil {
-		opts.Logger = slog.Default
+	// === 0. 创建运行策略（策略模式：消除分支判断） ===
+	var strategy RunStrategy
+	if opts.IsDistributed {
+		strategy = NewDistributedStrategy(opts.ExternalContext)
+	} else {
+		strategy = NewStandaloneStrategy(
+			opts.Logger,
+			opts.ReportPrefix,
+			opts.NoPrint,
+			opts.NoReport,
+			opts.NoWait,
+		)
 	}
 
 	// === 1. 加载配置 ===
@@ -94,7 +100,7 @@ func RunTask(opts RunOptions) *RunResult {
 	}
 
 	// === 4. 创建执行器 ===
-	exec, err := NewExecutor(cfg, opts.StorageMode, storagePath)
+	exec, err := NewExecutor(cfg, opts.StorageMode, storagePath, opts.Logger)
 	if err != nil {
 		result.Error = fmt.Errorf("创建执行器失败: %w", err)
 		return result
@@ -106,47 +112,33 @@ func RunTask(opts RunOptions) *RunResult {
 		exec.ReplaceCollector(opts.ExternalCollector)
 	}
 
-	// === 5. 准备执行上下文 ===
-	ctx, cancel := prepareContext(opts)
+	// === 5. 准备执行上下文（策略决定） ===
+	ctx, cancel, sigCh := strategy.PrepareContext(context.Background())
 	defer cancel()
 
 	// 确保程序退出前关闭实时报告服务器
 	defer func() {
 		if exec.GetRealtimeServer() != nil {
-			opts.Logger.Debug("🔒 正在关闭实时报告服务器...")
 			if err := exec.GetRealtimeServer().Stop(); err != nil {
 				opts.Logger.Warnf("⚠️  关闭实时报告服务器失败: %v", err)
 			}
 		}
 	}()
 
-	// === 6. 启动信号监听（仅独立模式） ===
-	var sigCh chan os.Signal
-	if !opts.IsDistributed {
-		sigCh = make(chan os.Signal, 1)
-		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-		go func() {
-			<-sigCh
-			opts.Logger.Warn("\n\n⚠️  收到中断信号，正在停止...")
-			cancel()
-		}()
-	}
-
-	// === 7. 启动内存监控 ===
+	// === 6. 启动内存监控 ===
 	if opts.MaxMemory != "" {
 		if err := startMemoryMonitor(ctx, opts.MaxMemory, cancel, opts.Logger); err != nil {
 			opts.Logger.Warnf("⚠️  %v", err)
 		}
 	}
 
-	// === 8. 执行压测 ===
+	// === 7. 执行压测 ===
 	report, err := exec.Run(ctx)
 	result.Report = report
 
 	if err != nil {
 		// 如果是用户中断（context canceled），不视为错误
-		if err.Error() == "执行压测失败: context canceled" ||
-			strings.Contains(err.Error(), "context canceled") {
+		if errors.Is(err, context.Canceled) {
 			opts.Logger.Warn("⚠️  用户已中断压测")
 		} else {
 			result.Error = fmt.Errorf("压测执行失败: %w", err)
@@ -154,22 +146,13 @@ func RunTask(opts RunOptions) *RunResult {
 		}
 	}
 
-	// === 9. 打印报告（仅独立模式） ===
-	if !opts.IsDistributed && !opts.NoPrint && report != nil {
-		report.Print()
+	// === 8. 执行后处理（策略决定：打印报告、保存文件等） ===
+	if err := strategy.AfterExecution(exec, report); err != nil {
+		opts.Logger.Warnf("⚠️  后处理失败: %v", err)
 	}
 
-	// === 10. 生成并保存报告（仅独立模式） ===
-	if !opts.IsDistributed && !opts.NoReport {
-		if err := saveReports(exec, report, opts.ReportPrefix, opts.Logger); err != nil {
-			opts.Logger.Warnf("⚠️  保存报告失败: %v", err)
-		}
-	}
-
-	// === 11. 等待用户查看报告（仅独立模式） ===
-	if !opts.IsDistributed && !opts.NoWait {
-		waitForExit(exec, sigCh, ctx, opts.Logger)
-	}
+	// === 9. 等待退出（策略决定） ===
+	strategy.WaitForExit(exec, sigCh, ctx)
 
 	return result
 }
@@ -179,10 +162,14 @@ func loadConfig(opts RunOptions) (*config.Config, error) {
 	var cfg *config.Config
 	var err error
 
-	// 从 curl 文件加载
+	// 从curl文件加载
 	if opts.CurlFile != "" {
 		opts.Logger.InfoKV("📄 解析curl文件", "file", opts.CurlFile)
-		cfg, err = config.ParseCurlFile(opts.CurlFile)
+		data, err := os.ReadFile(opts.CurlFile)
+		if err != nil {
+			return nil, fmt.Errorf("读取curl文件失败: %w", err)
+		}
+		cfg, err = config.NewCurlParser(string(data), opts.Logger)
 		if err != nil {
 			return nil, fmt.Errorf("解析curl文件失败: %w", err)
 		}
@@ -282,16 +269,6 @@ func prepareStoragePath(opts RunOptions) (string, error) {
 	return storagePath, nil
 }
 
-// prepareContext 准备执行上下文
-func prepareContext(opts RunOptions) (context.Context, context.CancelFunc) {
-	if opts.ExternalContext != nil {
-		// 分布式模式：使用外部传入的 context
-		return opts.ExternalContext, func() {} // 空函数，生命周期由外部控制
-	}
-	// 独立模式：创建自己的 context
-	return context.WithCancel(context.Background())
-}
-
 // startMemoryMonitor 启动内存监控
 func startMemoryMonitor(ctx context.Context, maxMemory string, cancel context.CancelFunc, log logger.ILogger) error {
 	threshold, err := units.ParseBytes(maxMemory)
@@ -353,14 +330,16 @@ func saveReports(exec *Executor, report *statistics.Report, reportPrefix string,
 		return fmt.Errorf("创建报告目录失败: %w", err)
 	}
 
-	// 生成并保存HTML报告
+	// 生成并保存HTML报告 - 使用 ReportExporter
 	htmlReportFile := filepath.Join(reportDir, "index.html")
 	totalDuration := time.Duration(0)
 	if report != nil {
 		totalDuration = report.TotalTime
 	}
 
-	if err := exec.GetCollector().GenerateHTMLReport(totalDuration, htmlReportFile); err != nil {
+	// 使用新的 ReportExporter 架构
+	exporter := statistics.NewReportExporter(exec.GetCollector())
+	if err := exporter.ExportHTML(totalDuration, htmlReportFile); err != nil {
 		return fmt.Errorf("生成HTML报告失败: %w", err)
 	}
 

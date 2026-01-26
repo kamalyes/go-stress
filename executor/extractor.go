@@ -17,8 +17,8 @@ import (
 	"regexp"
 	"text/template"
 
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/types"
 	"github.com/kamalyes/go-toolbox/pkg/convert"
 	"github.com/oliveagle/jsonpath"
@@ -265,13 +265,15 @@ type ExtractorManager struct {
 	extractors map[string]Extractor
 	transforms map[string][]config.TransformConfig
 	pipeline   *TransformPipeline
+	logger     logger.ILogger
 }
 
-func NewExtractorManager(configs []config.ExtractorConfig) (*ExtractorManager, error) {
+func NewExtractorManager(configs []config.ExtractorConfig, log logger.ILogger) (*ExtractorManager, error) {
 	manager := &ExtractorManager{
 		extractors: make(map[string]Extractor),
 		transforms: make(map[string][]config.TransformConfig),
 		pipeline:   NewTransformPipeline(config.NewVariableResolver()),
+		logger:     log,
 	}
 
 	for _, cfg := range configs {
@@ -338,10 +340,10 @@ func (m *ExtractorManager) ExtractAll(ctx *ExtractorContext, defaultValues map[s
 		value, err := extractor.Extract(ctx)
 		if err != nil {
 			if defaultVal, exists := defaultValues[name]; exists {
-				logger.Default.Warn("提取变量 [%s] 失败，使用默认值: %s, 错误: %v", name, defaultVal, err)
+				m.logger.Warn("提取变量 [%s] 失败，使用默认值: %s, 错误: %v", name, defaultVal, err)
 				results[name] = defaultVal
 			} else {
-				logger.Default.Warn("提取变量 [%s] 失败且无默认值: %v", name, err)
+				m.logger.Warn("提取变量 [%s] 失败且无默认值: %v", name, err)
 			}
 			continue
 		}
@@ -350,15 +352,15 @@ func (m *ExtractorManager) ExtractAll(ctx *ExtractorContext, defaultValues map[s
 		if transforms, hasTransforms := m.transforms[name]; hasTransforms && len(transforms) > 0 {
 			transformed, err := m.pipeline.Apply(value, transforms)
 			if err != nil {
-				logger.Default.Warn("转换变量 [%s] 失败: %v，使用原始值", name, err)
+				m.logger.Warn("转换变量 [%s] 失败: %v，使用原始值", name, err)
 			} else {
 				value = transformed
-				logger.Default.Debug("转换变量 [%s]: %s -> %s", name, value, transformed)
+				m.logger.Debug("转换变量 [%s]: %s -> %s", name, value, transformed)
 			}
 		}
 
 		results[name] = value
-		logger.Default.Debug("成功提取变量 [%s] = %s", name, value)
+		m.logger.Debug("成功提取变量 [%s] = %s", name, value)
 	}
 
 	return results

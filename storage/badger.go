@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2026-01-26 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-26 00:00:00
+ * @LastEditTime: 2026-01-26 15:30:00
  * @FilePath: \go-stress\storage\badger.go
  * @Description: BadgerDB 存储适配器 - 高性能 LSM-Tree 存储
  *
@@ -11,9 +11,10 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,8 @@ type BadgerStorage struct {
 	nodeID    string
 	logger    logger.ILogger
 	closed    bool
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	// 实时计数器
 	totalCount   *syncx.Uint64
@@ -65,8 +68,9 @@ func NewBadgerStorage(dbPath, nodeID string, log logger.ILogger) (*BadgerStorage
 	if err != nil {
 		return nil, fmt.Errorf("打开 BadgerDB 失败: %w", err)
 	}
-
 	log.Infof("✅ BadgerDB 已启动 (节点: %s, 路径: %s)", nodeID, dbPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	storage := &BadgerStorage{
 		db:           db,
@@ -75,19 +79,17 @@ func NewBadgerStorage(dbPath, nodeID string, log logger.ILogger) (*BadgerStorage
 		nodeID:       nodeID,
 		logger:       log,
 		closed:       false,
+		ctx:          ctx,
+		cancel:       cancel,
 		totalCount:   syncx.NewUint64(0),
 		successCount: syncx.NewUint64(0),
 		failedCount:  syncx.NewUint64(0),
 		skippedCount: syncx.NewUint64(0),
 	}
 
-	// 启动批量写入协程
+	// 启动事件循环（批量写入 + GC）
 	storage.wg.Add(1)
-	go storage.batchWriter()
-
-	// 启动后台GC
-	storage.wg.Add(1)
-	go storage.runGC()
+	go storage.runEventLoop()
 
 	return storage, nil
 }
@@ -111,14 +113,13 @@ func (s *BadgerStorage) Write(detail *RequestResult) {
 	}
 }
 
-// batchWriter 批量写入协程
-func (s *BadgerStorage) batchWriter() {
+// runEventLoop 使用 EventLoop 统一管理批量写入和GC
+func (s *BadgerStorage) runEventLoop() {
 	defer s.wg.Done()
 
 	batch := make([]*RequestResult, 0, s.batchSize)
-	ticker := time.NewTicker(1 * time.Second) // 每秒刷新
-	defer ticker.Stop()
 
+	// 批量写入刷新函数
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -133,26 +134,36 @@ func (s *BadgerStorage) batchWriter() {
 		batch = batch[:0] // 清空但保留容量
 	}
 
-	for {
-		select {
-		case detail, ok := <-s.writeChan:
-			if !ok {
-				flush()
-				return
-			}
+	// GC 执行函数
+	runGC := func() {
+		s.mu.RLock()
+		closed := s.closed
+		s.mu.RUnlock()
 
+		if closed {
+			return
+		}
+
+		err := s.db.RunValueLogGC(0.5) // 回收 50% 以上空间的日志文件
+		// badger.ErrNoRewrite 表示没有可回收的内容，这是正常情况
+		if err != nil && !errors.Is(err, badger.ErrNoRewrite) {
+			s.logger.Warnf("⚠️  BadgerDB GC 警告: %v", err)
+		}
+	}
+
+	// 使用 EventLoop 统一管理事件循环
+	syncx.NewEventLoop(s.ctx).
+		OnChannel(s.writeChan, func(detail *RequestResult) {
 			batch = append(batch, detail)
-
 			// 达到批量大小，立即写入
 			if len(batch) >= s.batchSize {
 				flush()
 			}
-
-		case <-ticker.C:
-			// 定时刷新
-			flush()
-		}
-	}
+		}).
+		OnTicker(1*time.Second, flush). // 每秒定时刷新
+		OnTicker(5*time.Minute, runGC). // 每5分钟GC
+		OnShutdown(flush).              // 关闭时最后一次刷新
+		Run()
 }
 
 // writeOne 同步写入单条
@@ -352,8 +363,6 @@ func (s *BadgerStorage) matchFilter(detail *RequestResult, filter StatusFilter) 
 		return !detail.Success && !detail.Skipped
 	case StatusFilterSkipped:
 		return detail.Skipped
-	case StatusFilterAll:
-		return true
 	default:
 		return true
 	}
@@ -371,6 +380,8 @@ func (s *BadgerStorage) Close() error {
 
 	s.logger.Info("🔒 关闭 BadgerDB 存储...")
 
+	// 取消 context，触发事件循环关闭
+	s.cancel()
 	close(s.writeChan)
 	s.wg.Wait()
 
@@ -396,31 +407,5 @@ func (s *BadgerStorage) GetStats() map[string]interface{} {
 		"lsm_size":      lsm,
 		"vlog_size":     vlog,
 		"total_size":    lsm + vlog,
-	}
-}
-
-// runGC 后台垃圾回收
-func (s *BadgerStorage) runGC() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			s.mu.RLock()
-			if s.closed {
-				s.mu.RUnlock()
-				return
-			}
-			s.mu.RUnlock()
-
-			// 运行 GC
-			err := s.db.RunValueLogGC(0.5) // 回收 50% 以上空间的日志文件
-			if err != nil && !strings.Contains(err.Error(), "nothing to GC") {
-				s.logger.Warnf("⚠️  BadgerDB GC 警告: %v", err)
-			}
-		}
 	}
 }

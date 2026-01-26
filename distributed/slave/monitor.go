@@ -45,17 +45,11 @@ func NewResourceMonitor(log logger.ILogger, interval time.Duration) *ResourceMon
 	}
 }
 
-// Start 启动资源监控
+// Start 启动资源监控 - 使用 EventLoop
 func (rm *ResourceMonitor) Start(ctx context.Context) {
-	ticker := time.NewTicker(rm.updateInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// 定期更新资源使用情况
+	// 使用 EventLoop 统一管理定时任务
+	syncx.NewEventLoop(ctx).
+		OnTicker(rm.updateInterval, func() {
 			usage, err := rm.GetResourceUsage()
 			if err != nil {
 				rm.logger.ErrorContextKV(ctx, "Failed to get resource usage", map[string]interface{}{
@@ -69,8 +63,8 @@ func (rm *ResourceMonitor) Start(ctx context.Context) {
 					"load_average":   usage.LoadAverage,
 				})
 			}
-		}
-	}
+		}).
+		Run()
 }
 
 // GetResourceUsage 获取当前资源使用情况

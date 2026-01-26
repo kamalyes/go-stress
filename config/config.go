@@ -13,6 +13,8 @@ package config
 
 import (
 	"time"
+
+	"github.com/kamalyes/go-logger"
 )
 
 // Config 压测配置
@@ -55,7 +57,19 @@ type Config struct {
 	Verify *VerifyConfig `json:"verify,omitempty" yaml:"verify,omitempty"`
 
 	// 运行模式标识（用于报告展示）
-	RunMode RunMode `json:"run_mode,omitempty" yaml:"run_mode,omitempty"` // cli 或 config
+	RunMode RunMode `json:"run_mode,omitempty" yaml:"run_mode,omitempty"`
+
+	logger logger.ILogger `json:"-" yaml:"-"` // 日志记录器（运行时注入，不序列化）
+}
+
+// GetLogger 获取日志器（访问私有字段的方法）
+func (c *Config) GetLogger() logger.ILogger {
+	return c.logger
+}
+
+// SetLogger 设置日志器
+func (c *Config) SetLogger(log logger.ILogger) {
+	c.logger = log
 }
 
 // APIConfig 单个API配置（可继承公共配置）

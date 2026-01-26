@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
@@ -40,10 +40,11 @@ type RealtimeServer struct {
 	cancel      context.CancelFunc
 	pauseCtx    context.Context
 	pauseCancel context.CancelFunc
+	logger      logger.ILogger
 }
 
 // NewRealtimeServer 创建实时报告服务器
-func NewRealtimeServer(collector *Collector, port int) *RealtimeServer {
+func NewRealtimeServer(collector *Collector, port int, log logger.ILogger) *RealtimeServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &RealtimeServer{
 		collector: collector,
@@ -54,6 +55,7 @@ func NewRealtimeServer(collector *Collector, port int) *RealtimeServer {
 		port:      port,
 		ctx:       ctx,
 		cancel:    cancel,
+		logger:    log,
 	}
 }
 
@@ -83,9 +85,9 @@ func (s *RealtimeServer) Start() error {
 	}
 
 	go func() {
-		logger.Default.Info("🌐 实时报告服务器启动: http://localhost:%d", s.port)
+		s.logger.Info("🌐 实时报告服务器启动: http://localhost:%d", s.port)
 		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Default.Errorf("实时报告服务器错误: %v", err)
+			s.logger.Errorf("实时报告服务器错误: %v", err)
 		}
 	}()
 
@@ -103,28 +105,35 @@ func (s *RealtimeServer) MarkCompleted() {
 	if !s.isCompleted {
 		s.endTime = time.Now()
 		s.isCompleted = true
-		logger.Default.Debug("实时服务器已标记为完成状态")
+		s.logger.Debug("实时服务器已标记为完成状态")
 	}
 }
 
 // Stop 停止服务器
 func (s *RealtimeServer) Stop() error {
-	// 取消context，停止broadcastLoop
+	// 防止重复关闭
+	s.mu.Lock()
+	if s.isStopped {
+		s.mu.Unlock()
+		return nil
+	}
+	s.isStopped = true
+	s.logger.Debug("🔒 正在关闭实时报告服务器...")
+	s.mu.Unlock()
+
+	// 取消context，停止broadcastLoop和所有SSE连接
 	if s.cancel != nil {
 		s.cancel()
 	}
 
-	// 不直接关闭 channel，让 defer 来处理
-	// 只清空 clients map，各个 goroutine 会通过 context.Done() 退出
-	s.mu.Lock()
-	s.clients = make(map[chan []byte]bool)
-	s.mu.Unlock()
-
-	// 关闭 HTTP 服务器
+	// 关闭 HTTP 服务器（这会触发所有handleStream的context取消，由defer清理client channels）
 	if s.server != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return s.server.Shutdown(ctx)
+		if err := s.server.Shutdown(ctx); err != nil {
+			// 强制关闭
+			return s.server.Close()
+		}
 	}
 	return nil
 }
@@ -209,18 +218,12 @@ func (s *RealtimeServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.(http.Flusher).Flush()
 
 	// 持续推送数据
-	for {
-		select {
-		case msg, ok := <-clientChan:
-			if !ok {
-				return
-			}
+	syncx.NewEventLoop(r.Context()).
+		OnChannel(clientChan, func(msg []byte) {
 			fmt.Fprintf(w, "data: %s\n\n", msg)
 			w.(http.Flusher).Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
+		}).
+		Run()
 }
 
 // handleData 处理数据API请求
@@ -307,7 +310,7 @@ func (s *RealtimeServer) handlePause(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if !s.isPaused && !s.isStopped {
 		s.isPaused = true
-		logger.Default.Warn("⏸  压测已暂停")
+		s.logger.Warn("⏸  压测已暂停")
 	}
 	s.mu.Unlock()
 
@@ -326,7 +329,7 @@ func (s *RealtimeServer) handleResume(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if s.isPaused && !s.isStopped {
 		s.isPaused = false
-		logger.Default.Info("▶️  压测已恢复")
+		s.logger.Info("▶️  压测已恢复")
 	}
 	s.mu.Unlock()
 
@@ -350,7 +353,7 @@ func (s *RealtimeServer) handleStop(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	logger.Default.Warn("⏹  压测已停止")
+	s.logger.Warn("⏹  压测已停止")
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
@@ -398,28 +401,22 @@ func (s *RealtimeServer) IsStopped() bool {
 	return s.isStopped
 }
 
-// broadcastLoop 广播循环
+// broadcastLoop 广播循环 - 使用 EventLoop
 func (s *RealtimeServer) broadcastLoop() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			// 收到退出信号
-			return
-		case <-ticker.C:
+	// 使用 EventLoop 统一管理定时广播
+	syncx.NewEventLoop(s.ctx).
+		OnTicker(1*time.Second, func() {
 			s.mu.RLock()
 			if len(s.clients) == 0 {
 				s.mu.RUnlock()
-				continue
+				return
 			}
 			s.mu.RUnlock()
 
 			data := s.collectData()
 			jsonData, err := json.Marshal(data)
 			if err != nil {
-				continue
+				return
 			}
 
 			s.mu.RLock()
@@ -431,6 +428,6 @@ func (s *RealtimeServer) broadcastLoop() {
 				}
 			}
 			s.mu.RUnlock()
-		}
-	}
+		}).
+		Run()
 }

@@ -71,6 +71,7 @@ func (rb *ReportBuilder) BuildReport(totalTime time.Duration, includeDetails boo
 			Protocol:        c.protocol,
 			Concurrency:     c.concurrency,
 			TotalReqs:       c.totalReqs,
+			logger:          c.logger,
 		}
 	})
 
@@ -79,23 +80,31 @@ func (rb *ReportBuilder) BuildReport(totalTime time.Duration, includeDetails boo
 		report.RequestDetails = c.GetRequestDetails(0, 10000000, StatusFilterAll, "", "") // 最多取1000万条
 	}
 
-	// 第四步：在锁外进行耗时计算
-	if totalReqs > 0 {
-		report.SuccessRate = mathx.Percentage(successReqs, totalReqs)
-		report.AvgLatency = c.totalDuration / time.Duration(totalReqs)
-		report.QPS = float64(totalReqs) / totalTime.Seconds()
+	// 第四步：在锁外计算统计数据
+	rb.calculateStats(report, totalReqs, totalTime)
+
+	return report
+}
+
+// calculateStats 计算统计数据（提取公共逻辑）
+func (rb *ReportBuilder) calculateStats(report *Report, totalReqs uint64, totalTime time.Duration) {
+	if totalReqs == 0 {
+		return
 	}
 
-	// 计算百分位（最耗时的操作，在锁外进行）
-	if len(c.durations) > 0 {
-		percentiles := mathx.Percentiles(c.durations, 50, 90, 95, 99)
+	// 计算基础统计
+	report.SuccessRate = mathx.Percentage(report.SuccessRequests, totalReqs)
+	report.AvgLatency = rb.collector.totalDuration / time.Duration(totalReqs)
+	report.QPS = float64(totalReqs) / totalTime.Seconds()
+
+	// 计算百分位
+	if len(rb.collector.durations) > 0 {
+		percentiles := mathx.Percentiles(rb.collector.durations, 50, 90, 95, 99)
 		report.P50Latency = time.Duration(percentiles[50] * float64(time.Second))
 		report.P90Latency = time.Duration(percentiles[90] * float64(time.Second))
 		report.P95Latency = time.Duration(percentiles[95] * float64(time.Second))
 		report.P99Latency = time.Duration(percentiles[99] * float64(time.Second))
 	}
-
-	return report
 }
 
 // BuildSummary 构建摘要（不包含明细，最快）

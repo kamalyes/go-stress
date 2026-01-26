@@ -69,7 +69,7 @@ var (
 	headers arrayFlags
 
 	// 日志配置
-	logLevel string
+	logLevel logger.LogLevelFlag
 	logFile  string
 	quiet    bool
 	verbose  bool
@@ -144,7 +144,7 @@ func init() {
 	flag.Var(&headers, "H", "请求头 (可多次使用)")
 
 	// 日志配置
-	flag.StringVar(&logLevel, "log-level", "info", "日志级别 (debug/info/warn/error)")
+	flag.Var(&logLevel, "log-level", "日志级别 (debug/info/warn/error)")
 	flag.StringVar(&logFile, "log-file", "", "日志文件路径")
 	flag.BoolVar(&quiet, "quiet", false, "静默模式（仅错误）")
 	flag.BoolVar(&verbose, "verbose", false, "详细模式（包含调试信息）")
@@ -269,25 +269,24 @@ func buildConfigFromFlags() *config.Config {
 
 // initLogger 初始化日志器
 func initLogger() {
-	config := logger.DefaultConfig()
+	logConfig := logger.DefaultConfig()
 
 	// 优先级：verbose > quiet > logLevel
 	switch {
 	case verbose:
-		config = config.WithLevel(logger.DEBUG).WithShowCaller(true).WithTimeFormat("2006-01-02 15:04:05.000")
+		logConfig = logConfig.WithLevel(logger.DEBUG).WithShowCaller(true)
 	case quiet:
-		config = config.WithLevel(logger.ERROR)
+		logConfig = logConfig.WithLevel(logger.ERROR)
 	default:
-		config = config.WithLevel(logger.ParseLogLevel(logLevel))
+		logConfig = logConfig.WithLevel(logLevel.Level)
 	}
 
 	// 配置输出
 	if logFile != "" {
 		rotateWriter := logger.NewRotateWriter(logFile, 100*1024*1024, 5)
-		config = config.WithOutput(rotateWriter).WithColorful(false)
+		logConfig = logConfig.WithOutput(rotateWriter).WithColorful(false)
 	}
-
-	logger.SetDefault(logger.New(config))
+	logger.SetDefault(logger.NewLogger(logConfig))
 }
 
 // parseHeader 解析请求头字符串
@@ -311,9 +310,9 @@ func printBanner() {
 	logger.Default.Info(`
 ╔══════════════════════════════════════════════════════════╗
 ║                                                          ║
-║     ⚡ Go Stress Testing Tool ⚡                         ║
+║     ⚡ Go Stress Testing Tool ⚡                        ║
 ║                                                          ║
-║     🚀 高性能压测工具                                     ║
+║     🚀 高性能压测工具                                    ║
 ║     🔧 支持 HTTP / gRPC / WebSocket                      ║
 ║     ⚙️  基于 go-toolbox 工具库                           ║
 ║                                                          ║
@@ -345,11 +344,11 @@ func printSimpleUsage() {
 	fmt.Println("  # 使用配置文件")
 	fmt.Println("  go-stress -config config.yaml")
 	fmt.Println("")
-	fmt.Println("  # Master模式（分布式）")
-	fmt.Println("  go-stress -mode master -config config.yaml")
+	fmt.Println("  # Master模式（等待Slave连接，通过Web界面提交任务）")
+	fmt.Println("  go-stress -mode master -http-port 8080 -grpc-port 9090")
 	fmt.Println("")
-	fmt.Println("  # Slave模式")
-	fmt.Println("  go-stress -mode slave -master localhost:9090")
+	fmt.Println("  # Slave模式（连接到Master）")
+	fmt.Println("  go-stress -mode slave -master master-ip:9090 -grpc-port 9091 -region default")
 
 	fmt.Println("\n💡 提示: 使用 'go-stress variables' 查看所有参数化变量")
 	fmt.Println("💡 提示: 使用 'go-stress examples' 查看详细示例")
@@ -637,28 +636,18 @@ func printConfigExample() {
 // runMasterMode 运行 Master 模式
 func runMasterMode() {
 	// 判断是否有任务配置
-	hasTask := configFile != "" || curlFile != "" || url != ""
-
 	opts := bootstrap.MasterOptions{
 		GRPCPort:          grpcPort,
 		HTTPPort:          httpPort,
 		Logger:            logger.Default,
-		ConfigFile:        configFile,
-		CurlFile:          curlFile,
-		Concurrency:       concurrency,
-		Requests:          requests,
-		URL:               url,
-		AutoSubmit:        hasTask, // 有任务配置时自动提交
-		WaitSlaves:        1,       // 至少等待 1 个 Slave
-		WaitTimeout:       30 * time.Second,
-		WorkersPerSlave:   workersPerSlave,   // 从命令行传入
-		MinSlaveCount:     minSlaveCount,     // 从命令行传入
-		HeartbeatInterval: heartbeatInterval, // 从命令行传入
-		HeartbeatTimeout:  heartbeatTimeout,  // 从命令行传入
-		MaxFailures:       maxFailures,       // 从命令行传入
-		TokenExpiration:   tokenExpiration,   // 从命令行传入
-		TokenIssuer:       tokenIssuer,       // 从命令行传入
-		Secret:            masterSecret,      // 从命令行传入
+		WorkersPerSlave:   workersPerSlave,
+		MinSlaveCount:     minSlaveCount,
+		HeartbeatInterval: heartbeatInterval,
+		HeartbeatTimeout:  heartbeatTimeout,
+		MaxFailures:       maxFailures,
+		TokenExpiration:   tokenExpiration,
+		TokenIssuer:       tokenIssuer,
+		Secret:            masterSecret,
 	}
 
 	if err := bootstrap.RunMaster(opts); err != nil {

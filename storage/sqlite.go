@@ -11,6 +11,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/kamalyes/go-logger"
+	"github.com/kamalyes/go-toolbox/pkg/mathx"
+	"github.com/kamalyes/go-toolbox/pkg/syncx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -40,6 +43,8 @@ type DetailStorage struct {
 	mu          sync.Mutex
 	nodeID      string // 节点ID（分布式模式下标识数据来源）
 	logger      logger.ILogger
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	// 统计信息
 	writeCount    uint64 // 写入总数
@@ -168,7 +173,7 @@ func (s *DetailStorage) Write(detail *RequestResult) {
 	}
 }
 
-// batchWriter 批量写入协程
+// batchWriter 批量写入协程 - 使用 EventLoop
 func (s *DetailStorage) batchWriter() {
 	defer s.wg.Done()
 
@@ -199,25 +204,17 @@ func (s *DetailStorage) batchWriter() {
 		batch = batch[:0] // 清空但保留容量
 	}
 
-	for {
-		select {
-		case detail, ok := <-s.writeChan:
-			if !ok {
-				// 通道关闭，刷新剩余数据
-				flush()
-				return
-			}
-
+	// 使用 EventLoop 统一管理事件循环
+	syncx.NewEventLoop(s.ctx).
+		OnChannel(s.writeChan, func(detail *RequestResult) {
 			batch = append(batch, detail)
 			if len(batch) >= s.batchSize {
 				flush()
 			}
-
-		case <-s.flushTicker.C:
-			// 定时刷新
-			flush()
-		}
-	}
+		}).
+		OnTicker(1*time.Second, flush). // 定时刷新
+		OnShutdown(flush).              // 关闭时最后一次刷新
+		Run()
 }
 
 // insertBatch 批量插入
@@ -261,8 +258,8 @@ func (s *DetailStorage) insertBatch(batch []*RequestResult) error {
 			detail.Body,
 			detail.Duration.Microseconds(),
 			detail.StatusCode,
-			boolToInt(detail.Success),
-			boolToInt(detail.Skipped),
+			mathx.IF(detail.Success, 1, 0),
+			mathx.IF(detail.Skipped, 1, 0),
 			detail.Size,
 			detail.ErrorMsg,
 			detail.ResponseBody,
@@ -434,11 +431,4 @@ func (s *DetailStorage) GetNodeID() string {
 // GetStats 获取存储统计信息
 func (s *DetailStorage) GetStats() (writeCount, flushCount, dropCount uint64) {
 	return s.writeCount, s.flushCount, s.dropCount
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

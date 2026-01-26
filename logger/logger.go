@@ -11,77 +11,84 @@
 package logger
 
 import (
+	"io"
 	"time"
 
 	"github.com/kamalyes/go-logger"
 )
 
-// 直接导出 go-logger 的类型和常量
+// 类型别名
 type (
-	StressLogger = logger.ILogger
-	LogLevel     = logger.LogLevel
-	LogConfig    = logger.LogConfig
+	ILogger   = logger.ILogger
+	LogConfig = logger.LogConfig
+	LogLevel  = logger.LogLevel
 )
 
+// 常量别名 - 日志级别
 const (
-	DEBUG LogLevel = logger.DEBUG
-	INFO  LogLevel = logger.INFO
-	WARN  LogLevel = logger.WARN
-	ERROR LogLevel = logger.ERROR
-	FATAL LogLevel = logger.FATAL
+	DEBUG = logger.DEBUG
+	INFO  = logger.INFO
+	WARN  = logger.WARN
+	ERROR = logger.ERROR
+	FATAL = logger.FATAL
 )
 
-// 全局默认日志器
-var Default StressLogger
+// 函数别名
+var (
+	NewLogger       = logger.NewLogger
+	NewRotateWriter = logger.NewRotateWriter
+)
+
+// Default 全局默认 logger 实例
+var Default logger.ILogger
 
 func init() {
-	// Windows 环境下启用 ANSI 颜色支持
-	enableWindowsANSI()
-
-	// 初始化默认日志器
-	Default = logger.NewLogger(DefaultConfig())
+	Default = New()
 }
 
-// SetDefault 设置默认日志器
-func SetDefault(l StressLogger) {
+func DefaultConfig() *logger.LogConfig {
+	config := logger.DefaultConfig().
+		WithPrefix("[STRESS] ").
+		WithShowCaller(false).
+		WithColorful(true).
+		WithTimeFormat(time.DateTime)
+	return config
+}
+
+// New 获取默认配置（带 STRESS 前缀）
+func New() *logger.Logger {
+	return logger.NewLogger(DefaultConfig())
+}
+
+// SetDefault 设置全局默认 logger
+func SetDefault(l logger.ILogger) {
 	Default = l
 }
 
-// New 创建新的日志器
-func New(config *LogConfig) StressLogger {
+// NewLoggerWithWriter 创建新日志器（便捷函数）
+func NewLoggerWithWriter(prefix string, writer io.Writer) *logger.Logger {
+	config := logger.DefaultConfig().
+		WithPrefix(prefix).
+		WithOutput(writer)
 	return logger.NewLogger(config)
 }
 
-// DefaultConfig 获取默认配置（带 STRESS 前缀）
-func DefaultConfig() *LogConfig {
-	return logger.DefaultConfig().
-		WithPrefix("[STRESS] ").
-		WithShowCaller(false).
-		WithColorful(true). // 始终启用颜色，已在 init 中启用 Windows 支持
-		WithTimeFormat(time.DateTime)
+// LogLevelFlag 日志级别标志（实现 flag.Value 接口）
+type LogLevelFlag struct {
+	Level logger.LogLevel
 }
 
-// ParseLogLevel 解析日志级别字符串
-func ParseLogLevel(level string) LogLevel {
-	switch level {
-	case "debug", "DEBUG":
-		return DEBUG
-	case "info", "INFO":
-		return INFO
-	case "warn", "WARN", "warning", "WARNING":
-		return WARN
-	case "error", "ERROR":
-		return ERROR
-	case "fatal", "FATAL":
-		return FATAL
-	default:
-		return INFO
+// String 返回日志级别的字符串表示（实现 flag.Value 接口）
+func (f *LogLevelFlag) String() string {
+	return f.Level.String()
+}
+
+// Set 从字符串设置日志级别（实现 flag.Value 接口）
+func (f *LogLevelFlag) Set(value string) error {
+	level, err := logger.ParseLevel(value)
+	if err != nil {
+		return err
 	}
+	f.Level = level
+	return nil
 }
-
-// 便捷函数 - 直接导出 go-logger 的工具函数
-var (
-	NewFileWriter    = logger.NewFileWriter
-	NewRotateWriter  = logger.NewRotateWriter
-	NewConsoleWriter = logger.NewConsoleWriter
-)

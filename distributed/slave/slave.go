@@ -81,7 +81,7 @@ func NewSlave(config *common.SlaveConfig, log logger.ILogger) (*Slave, error) {
 	slave := &Slave{
 		config:        config,
 		info:          info,
-		collector:     statistics.NewCollectorWithStorageInterface(storage.NewMemoryStorage(config.SlaveID, log)), // 使用内存存储
+		collector:     statistics.NewCollector(storage.NewMemoryStorage(config.SlaveID, log), log), // 使用内存存储
 		statsBuffer:   NewStatsBuffer(config.SlaveID, config.ReportBuffer, log),
 		monitor:       NewResourceMonitor(log, 5*time.Second),
 		logger:        log,

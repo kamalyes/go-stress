@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2025-12-30 11:17:55
+ * @LastEditTime: 2026-01-26 15:05:00
  * @FilePath: \go-stress\executor\api_selector.go
  * @Description: API选择器 - 支持多API轮询和权重分配
  *
@@ -14,32 +14,21 @@ import (
 	"math/rand"
 	"sync/atomic"
 
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-toolbox/pkg/types"
 )
 
 // APISelector API选择器接口
 type APISelector interface {
 	// Next 获取下一个API请求配置
-	Next() *APIRequestConfig
+	Next() *APIConfig
 
 	// HasDependencies 是否有依赖关系
 	HasDependencies() bool
 
 	// GetDependencyResolver 获取依赖解析器（如果有依赖）
 	GetDependencyResolver() *DependencyResolver
-}
-
-// APIRequestConfig API请求配置
-type APIRequestConfig struct {
-	Name       string
-	URL        string
-	Method     string
-	Headers    map[string]string
-	Body       string
-	Repeat     int                      // 重复执行次数
-	Verify     []config.VerifyConfig
-	Extractors []config.ExtractorConfig // 数据提取器配置
 }
 
 // roundRobinSelector 轮询选择器
@@ -57,30 +46,14 @@ func NewRoundRobinSelector(apis []config.APIConfig) APISelector {
 }
 
 // Next 轮询获取下一个API
-func (s *roundRobinSelector) Next() *APIRequestConfig {
+func (s *roundRobinSelector) Next() *APIConfig {
 	if len(s.apis) == 0 {
 		return nil
 	}
 
 	// 原子递增计数器
 	idx := atomic.AddUint64(&s.counter, 1) - 1
-	api := s.apis[idx%uint64(len(s.apis))]
-
-	// 深拷贝 Headers，避免并发修改
-	headers := make(map[string]string, len(api.Headers))
-	for k, v := range api.Headers {
-		headers[k] = v
-	}
-
-	return &APIRequestConfig{
-		Name:       api.Name,
-		URL:        api.URL,
-		Method:     api.Method,
-		Headers:    headers,
-		Body:       api.Body,
-		Verify:     api.Verify,
-		Extractors: api.Extractors,
-	}
+	return &s.apis[idx%uint64(len(s.apis))]
 }
 
 // HasDependencies 是否有依赖关系
@@ -102,15 +75,18 @@ type weightedSelector struct {
 
 // NewWeightedSelector 创建加权选择器
 func NewWeightedSelector(apis []config.APIConfig) APISelector {
-	weights := make([]int, len(apis))
-	total := 0
-	for i, api := range apis {
-		weight := api.Weight
-		if weight <= 0 {
-			weight = 1
+	// 使用 types.MapTR 提取权重
+	weights := types.MapTR(apis, func(api config.APIConfig) int {
+		if api.Weight <= 0 {
+			return 1
 		}
-		weights[i] = weight
-		total += weight
+		return api.Weight
+	})
+
+	// 计算总权重
+	total := 0
+	for _, w := range weights {
+		total += w
 	}
 
 	return &weightedSelector{
@@ -121,7 +97,7 @@ func NewWeightedSelector(apis []config.APIConfig) APISelector {
 }
 
 // Next 根据权重随机选择API
-func (s *weightedSelector) Next() *APIRequestConfig {
+func (s *weightedSelector) Next() *APIConfig {
 	if len(s.apis) == 0 {
 		return nil
 	}
@@ -134,40 +110,12 @@ func (s *weightedSelector) Next() *APIRequestConfig {
 	for i, weight := range s.weights {
 		sum += weight
 		if r < sum {
-			api := s.apis[i]
-			// 深拷贝 Headers，避免并发修改
-			headers := make(map[string]string, len(api.Headers))
-			for k, v := range api.Headers {
-				headers[k] = v
-			}
-			return &APIRequestConfig{
-				Name:       api.Name,
-				URL:        api.URL,
-				Method:     api.Method,
-				Headers:    headers,
-				Body:       api.Body,
-				Verify:     api.Verify,
-				Extractors: api.Extractors,
-			}
+			return &s.apis[i]
 		}
 	}
 
 	// 默认返回第一个
-	api := s.apis[0]
-	// 深拷贝 Headers，避免并发修改
-	headers := make(map[string]string, len(api.Headers))
-	for k, v := range api.Headers {
-		headers[k] = v
-	}
-	return &APIRequestConfig{
-		Name:       api.Name,
-		URL:        api.URL,
-		Method:     api.Method,
-		Headers:    headers,
-		Body:       api.Body,
-		Verify:     api.Verify,
-		Extractors: api.Extractors,
-	}
+	return &s.apis[0]
 }
 
 // HasDependencies 是否有依赖关系
@@ -180,59 +128,6 @@ func (s *weightedSelector) GetDependencyResolver() *DependencyResolver {
 	return nil
 }
 
-// singleAPISelector 单API选择器（向后兼容）
-type singleAPISelector struct {
-	config *APIRequestConfig
-}
-
-// NewSingleAPISelector 创建单API选择器
-func NewSingleAPISelector(cfg *config.Config) APISelector {
-	var verify []config.VerifyConfig
-	if cfg.Verify != nil {
-		verify = []config.VerifyConfig{*cfg.Verify}
-	}
-
-	return &singleAPISelector{
-		config: &APIRequestConfig{
-			Name:    "default",
-			URL:     cfg.URL,
-			Method:  cfg.Method,
-			Headers: cfg.Headers,
-			Body:    cfg.Body,
-			Verify:  verify,
-		},
-	}
-}
-
-// Next 返回单个API配置（每次返回新的副本，避免并发修改）
-func (s *singleAPISelector) Next() *APIRequestConfig {
-	// 深拷贝 Headers，避免并发修改
-	headers := make(map[string]string, len(s.config.Headers))
-	for k, v := range s.config.Headers {
-		headers[k] = v
-	}
-
-	return &APIRequestConfig{
-		Name:       s.config.Name,
-		URL:        s.config.URL,
-		Method:     s.config.Method,
-		Headers:    headers,
-		Body:       s.config.Body,
-		Verify:     s.config.Verify,
-		Extractors: s.config.Extractors,
-	}
-}
-
-// HasDependencies 是否有依赖关系
-func (s *singleAPISelector) HasDependencies() bool {
-	return false
-}
-
-// GetDependencyResolver 获取依赖解析器
-func (s *singleAPISelector) GetDependencyResolver() *DependencyResolver {
-	return nil
-}
-
 // dependencySelector 依赖执行选择器（按依赖顺序执行）
 type dependencySelector struct {
 	resolver *DependencyResolver
@@ -241,8 +136,8 @@ type dependencySelector struct {
 }
 
 // NewDependencySelector 创建依赖选择器
-func NewDependencySelector(apis []config.APIConfig) (APISelector, error) {
-	resolver, err := NewDependencyResolver(apis)
+func NewDependencySelector(apis []config.APIConfig, log logger.ILogger) (APISelector, error) {
+	resolver, err := NewDependencyResolver(apis, log)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +150,7 @@ func NewDependencySelector(apis []config.APIConfig) (APISelector, error) {
 }
 
 // Next 按依赖顺序返回下一个API
-func (s *dependencySelector) Next() *APIRequestConfig {
+func (s *dependencySelector) Next() *APIConfig {
 	if len(s.order) == 0 {
 		return nil
 	}
@@ -267,35 +162,13 @@ func (s *dependencySelector) Next() *APIRequestConfig {
 	// 检查该API是否应该被跳过（因为依赖失败）
 	if s.resolver.ShouldSkipAPI(apiName) {
 		// 返回一个标记为跳过的配置
-		return &APIRequestConfig{
-			Name:    apiName,
-			URL:     "",
-			Method:  "SKIP",
-			Headers: map[string]string{},
-			Body:    "",
+		return &APIConfig{
+			Name:   apiName,
+			Method: "SKIP",
 		}
 	}
 
-	api := s.resolver.GetAPI(apiName)
-	if api == nil {
-		return nil
-	}
-
-	// 深拷贝 Headers，避免并发修改
-	headers := make(map[string]string, len(api.Headers))
-	for k, v := range api.Headers {
-		headers[k] = v
-	}
-
-	return &APIRequestConfig{
-		Name:       api.Name,
-		URL:        api.URL,
-		Method:     api.Method,
-		Headers:    headers,
-		Body:       api.Body,
-		Verify:     api.Verify,
-		Extractors: api.Extractors,
-	}
+	return s.resolver.GetAPI(apiName)
 }
 
 // HasDependencies 是否有依赖关系
@@ -310,9 +183,24 @@ func (s *dependencySelector) GetDependencyResolver() *DependencyResolver {
 
 // CreateAPISelector 创建API选择器
 func CreateAPISelector(cfg *config.Config) APISelector {
-	// 如果没有定义APIs，使用单API模式
+	// 如果没有定义APIs，转换为单API配置
 	if len(cfg.APIs) == 0 {
-		return NewSingleAPISelector(cfg)
+		var verify []config.VerifyConfig
+		if cfg.Verify != nil {
+			verify = []config.VerifyConfig{*cfg.Verify}
+		}
+
+		cfg.APIs = []config.APIConfig{
+			{
+				Name:    "default",
+				URL:     cfg.URL,
+				Method:  cfg.Method,
+				Headers: cfg.Headers,
+				Body:    cfg.Body,
+				Weight:  1,
+				Verify:  verify,
+			},
+		}
 	}
 
 	// 检查是否有依赖关系
@@ -326,9 +214,9 @@ func CreateAPISelector(cfg *config.Config) APISelector {
 
 	// 如果有依赖关系或提取器，使用依赖选择器
 	if hasDeps {
-		selector, err := NewDependencySelector(cfg.APIs)
+		selector, err := NewDependencySelector(cfg.APIs, cfg.GetLogger())
 		if err != nil {
-			logger.Default.Error("创建依赖选择器失败: %v，回退到轮询模式", err)
+			cfg.GetLogger().Error("创建依赖选择器失败: %v，回退到轮询模式", err)
 			return NewRoundRobinSelector(cfg.APIs)
 		}
 		return selector
@@ -353,7 +241,7 @@ func CreateAPISelector(cfg *config.Config) APISelector {
 }
 
 // BuildRequest 从API配置构建请求
-func BuildRequest(apiCfg *APIRequestConfig) *Request {
+func BuildRequest(apiCfg *APIConfig) *Request {
 	return &Request{
 		URL:     apiCfg.URL,
 		Method:  apiCfg.Method,

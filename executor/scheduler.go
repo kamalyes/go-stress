@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/statistics"
 )
 
@@ -28,11 +28,11 @@ type Scheduler struct {
 	clientPool       *ClientPool
 	handler          RequestHandler
 	collector        *statistics.Collector
-	reqBuilder       *RequestBuilder // 单API模式使用
-	apiSelector      APISelector     // 多API模式使用
+	apiSelector      APISelector // API选择器（统一入口）
 	progress         *ProgressTracker
-	varResolver      *config.VariableResolver // 新增
+	varResolver      *config.VariableResolver // 变量解析器
 	controller       Controller               // 控制器
+	logger           logger.ILogger
 }
 
 // SchedulerConfig 调度器配置
@@ -43,10 +43,10 @@ type SchedulerConfig struct {
 	ClientPool       *ClientPool
 	Handler          RequestHandler
 	Collector        *statistics.Collector
-	ReqBuilder       *RequestBuilder          // 单API模式使用（可选）
-	APISelector      APISelector              // 多API模式使用（可选）
-	VarResolver      *config.VariableResolver // 新增
+	APISelector      APISelector              // API选择器（必需）
+	VarResolver      *config.VariableResolver // 变量解析器
 	Controller       Controller               // 控制器（可选）
+	Logger           logger.ILogger
 }
 
 // NewScheduler 创建调度器
@@ -63,11 +63,11 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		clientPool:       cfg.ClientPool,
 		handler:          cfg.Handler,
 		collector:        cfg.Collector,
-		reqBuilder:       cfg.ReqBuilder,
 		apiSelector:      cfg.APISelector,
-		progress:         NewProgressTrackerWithCollector(totalRequests, cfg.Collector, cfg.WorkerCount),
+		progress:         NewProgressTrackerWithCollector(totalRequests, cfg.Collector, cfg.WorkerCount, cfg.Logger),
 		varResolver:      cfg.VarResolver,
 		controller:       ctrl,
+		logger:           cfg.Logger,
 	}
 }
 
@@ -125,7 +125,7 @@ func (s *Scheduler) runWorker(ctx context.Context, workerID uint64) error {
 	// 从连接池获取客户端
 	client, err := s.clientPool.Get()
 	if err != nil {
-		logger.Default.Errorf("❌ Worker %d: 获取客户端失败: %v", workerID, err)
+		s.logger.Errorf("❌ Worker %d: 获取客户端失败: %v", workerID, err)
 		return err
 	}
 	defer s.clientPool.Put(client)
@@ -137,9 +137,9 @@ func (s *Scheduler) runWorker(ctx context.Context, workerID uint64) error {
 		Handler:     s.wrapHandlerWithProgress(s.handler),
 		Collector:   s.collector,
 		ReqCount:    s.requestPerWorker,
-		ReqBuilder:  s.reqBuilder,
 		APISelector: s.apiSelector,
 		Controller:  s.controller,
+		Logger:      s.logger,
 	}, s.varResolver)
 
 	// 运行worker

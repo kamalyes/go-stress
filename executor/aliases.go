@@ -11,6 +11,7 @@
 package executor
 
 import (
+	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/types"
 )
 
@@ -40,6 +41,9 @@ type (
 
 	// 验证结果
 	VerificationResult = types.VerificationResult
+
+	// 配置相关 - 直接使用 config.APIConfig，不再转换
+	APIConfig = config.APIConfig
 )
 
 // 常量别名

@@ -126,36 +126,50 @@ func (f *HTMLFormatter) ContentType() string {
 	return "text/html; charset=utf-8"
 }
 
+// convertToStats 通用的统计转换函数（消除重复）
+func convertToStats[K comparable, V any](data map[K]uint64, total uint64, creator func(K, uint64, string) V, sorter func([]V)) []V {
+	result := make([]V, 0, len(data))
+	for key, count := range data {
+		percentage := mathx.Percentage(count, total)
+		percentageStr := fmt.Sprintf("%.2f%%", percentage)
+		result = append(result, creator(key, count, percentageStr))
+	}
+	sorter(result)
+	return result
+}
+
 // convertErrors 转换错误统计为展示格式
 func (f *HTMLFormatter) convertErrors(errors map[string]uint64, total uint64) []ErrorStat {
-	result := make([]ErrorStat, 0, len(errors))
-	for err, count := range errors {
-		percentage := mathx.Percentage(count, total)
-		result = append(result, ErrorStat{
-			Error:      err,
-			Count:      count,
-			Percentage: fmt.Sprintf("%.2f%%", percentage),
-		})
-	}
-	// 按数量降序排序
-	mathx.SortByCount(result, func(e ErrorStat) uint64 { return e.Count })
-	return result
+	return convertToStats(errors, total,
+		func(err string, count uint64, percentage string) ErrorStat {
+			return ErrorStat{
+				Error:      err,
+				Count:      count,
+				Percentage: percentage,
+			}
+		},
+		func(result []ErrorStat) {
+			// 按数量降序排序
+			mathx.SortByCount(result, func(e ErrorStat) uint64 { return e.Count })
+		},
+	)
 }
 
 // convertStatusCodes 转换状态码统计为展示格式
 func (f *HTMLFormatter) convertStatusCodes(codes map[int]uint64, total uint64) []StatusCodeStat {
-	result := make([]StatusCodeStat, 0, len(codes))
-	for code, count := range codes {
-		percentage := mathx.Percentage(count, total)
-		result = append(result, StatusCodeStat{
-			StatusCode: code,
-			Count:      count,
-			Percentage: fmt.Sprintf("%.2f%%", percentage),
-		})
-	}
-	// 按状态码升序排序
-	mathx.SortByKey(result, func(s StatusCodeStat) int { return s.StatusCode })
-	return result
+	return convertToStats(codes, total,
+		func(code int, count uint64, percentage string) StatusCodeStat {
+			return StatusCodeStat{
+				StatusCode: code,
+				Count:      count,
+				Percentage: percentage,
+			}
+		},
+		func(result []StatusCodeStat) {
+			// 按状态码升序排序
+			mathx.SortByKey(result, func(s StatusCodeStat) int { return s.StatusCode })
+		},
+	)
 }
 
 // ===== 文本格式化器 =====

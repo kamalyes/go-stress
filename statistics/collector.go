@@ -13,7 +13,7 @@ package statistics
 import (
 	"time"
 
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-toolbox/pkg/idgen"
 	"github.com/kamalyes/go-toolbox/pkg/mathx"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
@@ -60,10 +60,13 @@ type Collector struct {
 
 	// 关闭标志
 	closed *syncx.Bool
+
+	// 日志器
+	logger logger.ILogger
 }
 
-// NewCollectorWithStorageInterface 使用已创建的存储接口创建收集器（工厂模式）
-func NewCollectorWithStorageInterface(strg StorageInterface) *Collector {
+// NewCollector 使用存储和日志器创建收集器
+func NewCollector(strg StorageInterface, log logger.ILogger) *Collector {
 	return &Collector{
 		totalRequests:   syncx.NewUint64(0),
 		successRequests: syncx.NewUint64(0),
@@ -78,13 +81,14 @@ func NewCollectorWithStorageInterface(strg StorageInterface) *Collector {
 		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
 		minDuration:     time.Hour,
 		closed:          syncx.NewBool(false),
+		logger:          log,
 	}
 }
 
 // Collect 收集单次请求结果
 func (c *Collector) Collect(result *RequestResult) {
 	if result == nil {
-		logger.Default.Warn("⚠️  收到空的请求结果，跳过收集")
+		c.logger.Warn("⚠️  收到空的请求结果，跳过收集")
 		return
 	}
 
@@ -143,52 +147,6 @@ func (c *Collector) Collect(result *RequestResult) {
 	c.storage.Write(result)
 }
 
-// GenerateReport 生成统计报告
-func (c *Collector) GenerateReport(totalTime time.Duration) *Report {
-	return syncx.WithRLockReturnValue(c.mu, func() *Report {
-		// 使用 mathx 批量计算百分位
-		percentiles := mathx.Percentiles(c.durations, 50, 90, 95, 99)
-
-		// 使用 ToMap() 高级方法获取统计数据
-		errorsMap := c.errors.ToMap()
-		statusCodesMap := c.statusCodes.ToMap()
-
-		totalReqs := c.totalRequests.Load()
-		successReqs := c.successRequests.Load()
-
-		report := &Report{
-			TotalRequests:   totalReqs,
-			SuccessRequests: successReqs,
-			FailedRequests:  c.failedRequests.Load(),
-			TotalTime:       totalTime,
-			TotalSize:       c.totalSize,
-			Errors:          errorsMap,
-			StatusCodes:     statusCodesMap,
-			RequestDetails:  nil, // 详情数据按需加载（通过 QueryDetails/QueryAll 从存储层获取）
-		}
-
-		if totalReqs > 0 {
-			// 使用 mathx.Percentage 计算成功率
-			report.SuccessRate = mathx.Percentage(successReqs, totalReqs)
-			report.AvgLatency = c.totalDuration / time.Duration(totalReqs)
-			report.QPS = float64(totalReqs) / totalTime.Seconds()
-		}
-
-		report.MinLatency = c.minDuration
-		report.MaxLatency = c.maxDuration
-
-		// 使用 mathx 计算的百分位
-		if len(percentiles) > 0 {
-			report.P50Latency = time.Duration(percentiles[50] * float64(time.Second))
-			report.P90Latency = time.Duration(percentiles[90] * float64(time.Second))
-			report.P95Latency = time.Duration(percentiles[95] * float64(time.Second))
-			report.P99Latency = time.Duration(percentiles[99] * float64(time.Second))
-		}
-
-		return report
-	})
-}
-
 // GetMetrics 获取实时指标
 func (c *Collector) GetMetrics() *Metrics {
 	return &Metrics{
@@ -230,7 +188,7 @@ func (c *Collector) GetStatusCodes() map[int]uint64 {
 func (c *Collector) GetRequestDetails(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) []*RequestResult {
 	// 即使 Collector 已关闭，依然允许读取已存储的数据
 	if c.storage == nil {
-		logger.Default.Warn("⚠️  存储未初始化")
+		c.logger.Warn("⚠️  存储未初始化")
 		return []*RequestResult{}
 	}
 
@@ -241,7 +199,7 @@ func (c *Collector) GetRequestDetails(offset, limit int, statusFilter StatusFilt
 
 	// 记录错误（除非已关闭）
 	if !c.closed.Load() {
-		logger.Default.Warnf("⚠️  从存储读取失败: %v", err)
+		c.logger.Warnf("⚠️  从存储读取失败: %v", err)
 	}
 
 	// 降级：返回空切片
@@ -252,7 +210,7 @@ func (c *Collector) GetRequestDetails(offset, limit int, statusFilter StatusFilt
 func (c *Collector) GetRequestDetailsCount(statusFilter StatusFilter, nodeID, taskID string) int {
 	// 即使 Collector 已关闭，依然允许读取已存储的数据计数
 	if c.storage == nil {
-		logger.Default.Warn("⚠️  存储未初始化")
+		c.logger.Warn("⚠️  存储未初始化")
 		return 0
 	}
 
@@ -263,7 +221,7 @@ func (c *Collector) GetRequestDetailsCount(statusFilter StatusFilter, nodeID, ta
 
 	// 记录错误（除非已关闭）
 	if !c.closed.Load() {
-		logger.Default.Warnf("⚠️  统计总数失败: %v", err)
+		c.logger.Warnf("⚠️  统计总数失败: %v", err)
 	}
 
 	// 降级：返回0
@@ -273,7 +231,7 @@ func (c *Collector) GetRequestDetailsCount(statusFilter StatusFilter, nodeID, ta
 // GetRequestDetailsWithFilter 获取请求明细（支持指定 nodeID 和 taskID 过滤，用于分布式模式）
 func (c *Collector) GetRequestDetailsWithFilter(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) []*RequestResult {
 	if c.storage == nil {
-		logger.Default.Warn("⚠️  存储未初始化")
+		c.logger.Warn("⚠️  存储未初始化")
 		return []*RequestResult{}
 	}
 
@@ -283,7 +241,7 @@ func (c *Collector) GetRequestDetailsWithFilter(offset, limit int, statusFilter 
 	}
 
 	if !c.closed.Load() {
-		logger.Default.Warnf("⚠️  从存储读取失败: %v", err)
+		c.logger.Warnf("⚠️  从存储读取失败: %v", err)
 	}
 
 	return []*RequestResult{}
@@ -292,7 +250,7 @@ func (c *Collector) GetRequestDetailsWithFilter(offset, limit int, statusFilter 
 // GetRequestDetailsCountWithFilter 获取请求明细总数（支持指定 nodeID 和 taskID 过滤，用于分布式模式）
 func (c *Collector) GetRequestDetailsCountWithFilter(statusFilter StatusFilter, nodeID, taskID string) int {
 	if c.storage == nil {
-		logger.Default.Warn("⚠️  存储未初始化")
+		c.logger.Warn("⚠️  存储未初始化")
 		return 0
 	}
 
@@ -302,7 +260,7 @@ func (c *Collector) GetRequestDetailsCountWithFilter(statusFilter StatusFilter, 
 	}
 
 	if !c.closed.Load() {
-		logger.Default.Warnf("⚠️  统计总数失败: %v", err)
+		c.logger.Warnf("⚠️  统计总数失败: %v", err)
 	}
 
 	return 0
@@ -338,10 +296,10 @@ func (c *Collector) ClearExternalReporter() {
 func (c *Collector) Close() error {
 	// 设置关闭标志
 	c.closed.Store(true)
-	logger.Default.Debug("📌 Collector 已标记为关闭状态")
+	c.logger.Debug("📌 Collector 已标记为关闭状态")
 
 	if c.storage != nil {
-		logger.Default.Debug("📌 正在关闭存储...")
+		c.logger.Debug("📌 正在关闭存储...")
 		return c.storage.Close()
 	}
 	return nil

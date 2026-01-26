@@ -16,29 +16,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-stress/verify"
+	"github.com/kamalyes/go-toolbox/pkg/mathx"
 )
 
 // WorkerDependencyContext 每个 worker 的本地依赖上下文
 type WorkerDependencyContext struct {
 	extractedVars map[string]string // 本地提取的变量
 	failedAPIs    map[string]bool   // 本地失败的 API
-}
-
-// copyHeaders 深拷贝 Headers map，避免并发修改
-func copyHeaders(headers map[string]string) map[string]string {
-	if headers == nil {
-		return nil
-	}
-
-	newHeaders := make(map[string]string, len(headers))
-	for k, v := range headers {
-		newHeaders[k] = v
-	}
-	return newHeaders
 }
 
 // NewWorkerDependencyContext 创建新的依赖上下文
@@ -56,11 +44,11 @@ type Worker struct {
 	handler     RequestHandler
 	collector   *statistics.Collector
 	reqCount    uint64
-	reqBuilder  *RequestBuilder          // 单API模式使用
-	apiSelector APISelector              // 多API模式使用
+	apiSelector APISelector              // API选择器（统一入口）
 	varResolver *config.VariableResolver // 动态变量解析器
 	controller  Controller               // 控制器
 	depContext  *WorkerDependencyContext // 本地依赖上下文
+	logger      logger.ILogger
 }
 
 // WorkerConfig Worker配置
@@ -70,9 +58,9 @@ type WorkerConfig struct {
 	Handler     RequestHandler
 	Collector   *statistics.Collector
 	ReqCount    uint64
-	ReqBuilder  *RequestBuilder // 单API模式使用（可选）
-	APISelector APISelector     // 多API模式使用（可选）
-	Controller  Controller      // 控制器（可选）
+	APISelector APISelector // API选择器（必需）
+	Controller  Controller  // 控制器（可选）
+	Logger      logger.ILogger
 }
 
 // NewWorker 创建Worker
@@ -88,11 +76,11 @@ func NewWorker(cfg WorkerConfig, varResolver *config.VariableResolver) *Worker {
 		handler:     cfg.Handler,
 		collector:   cfg.Collector,
 		reqCount:    cfg.ReqCount,
-		reqBuilder:  cfg.ReqBuilder,
 		apiSelector: cfg.APISelector,
 		varResolver: varResolver,
 		controller:  ctrl,
 		depContext:  NewWorkerDependencyContext(),
+		logger:      cfg.Logger,
 	}
 }
 
@@ -100,7 +88,7 @@ func NewWorker(cfg WorkerConfig, varResolver *config.VariableResolver) *Worker {
 func (w *Worker) Run(ctx context.Context) error {
 	// 建立连接
 	if err := w.client.Connect(ctx); err != nil {
-		logger.Default.Errorf("❌ Worker %d: 连接失败: %v", w.id, err)
+		w.logger.Errorf("❌ Worker %d: 连接失败: %v", w.id, err)
 		return err
 	}
 	defer w.client.Close()
@@ -126,13 +114,8 @@ func (w *Worker) Run(ctx context.Context) error {
 		default:
 		}
 
-		// 检查是否停止
-		if w.controller.IsStopped() {
-			return nil
-		}
-
-		// 等待暂停结束
-		if stopped := WaitWhilePaused(w.controller); stopped {
+		// 检查控制状态
+		if w.checkControlState() {
 			return nil
 		}
 
@@ -145,38 +128,25 @@ func (w *Worker) Run(ctx context.Context) error {
 		// 在依赖链模式下，按顺序执行完整的依赖链
 		if isDependencyMode && len(executionOrder) > 0 {
 			for _, apiName := range executionOrder {
-				// 检查是否停止
-				if w.controller.IsStopped() {
-					return nil
-				}
-
-				// 等待暂停结束
-				if stopped := WaitWhilePaused(w.controller); stopped {
+				// 检查控制状态
+				if w.checkControlState() {
 					return nil
 				}
 
 				// 获取 API 配置以检查重复次数
 				api := resolver.GetAPI(apiName)
 				if api == nil {
-					logger.Default.Errorf("Worker %d: 找不到 API [%s]", w.id, apiName)
+					w.logger.Errorf("Worker %d: 找不到 API [%s]", w.id, apiName)
 					continue
 				}
 
 				// 确定重复次数（默认为1）
-				repeatCount := 1
-				if api.Repeat > 0 {
-					repeatCount = api.Repeat
-				}
+				repeatCount := mathx.IfNotZero(api.Repeat, 1)
 
 				// 执行指定次数
 				for r := 0; r < repeatCount; r++ {
-					// 检查是否停止
-					if w.controller.IsStopped() {
-						return nil
-					}
-
-					// 等待暂停结束
-					if stopped := WaitWhilePaused(w.controller); stopped {
+					// 检查控制状态
+					if w.checkControlState() {
 						return nil
 					}
 
@@ -200,216 +170,40 @@ func (w *Worker) Run(ctx context.Context) error {
 	return nil
 }
 
-// executeRequest 执行单次请求
-func (w *Worker) executeRequest(ctx context.Context) {
-	// 构建请求
-	var req *Request
-	var apiCfg *APIRequestConfig
-
-	if w.apiSelector != nil {
-		// 多API模式：从选择器获取下一个API
-		apiCfg = w.apiSelector.Next()
-		if apiCfg == nil {
-			logger.Default.Error("API选择器返回空配置")
-			return
-		}
-
-		// 检查是否被标记为跳过（使用本地上下文）
-		if w.shouldSkipAPI(apiCfg.Name) {
-			// 替换提取的变量（保留完整配置）
-			apiCfg = w.replaceExtractedVarsLocal(apiCfg)
-			apiCfg = w.resolveAPIConfigVariables(apiCfg)
-
-			// 找出具体失败的依赖API
-			failedDeps := w.getFailedDependencies(apiCfg.Name)
-			skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
-
-			// 跳过该API，记录完整配置但标记为跳过
-			result := &RequestResult{
-				Success:    false,
-				Skipped:    true,
-				SkipReason: skipReason,
-				GroupID:    0, // 非依赖模式下 GroupID 为 0
-				APIName:    apiCfg.Name,
-				StatusCode: 0,
-				Duration:   0,
-				Error:      fmt.Errorf("%s", skipReason),
-				Timestamp:  time.Now(),
-				URL:        apiCfg.URL,
-				Method:     apiCfg.Method,
-				Headers:    apiCfg.Headers,
-				Body:       apiCfg.Body,
-				// 记录配置的验证规则（虽未执行，但有助于排查）
-				Verifications: w.buildPlannedVerifications(apiCfg),
-			}
-			w.collector.Collect(result)
-			logger.Default.Warnf("⏭️  Worker %d: 跳过 API [%s]，%s", w.id, apiCfg.Name, skipReason)
-			return
-		}
-
-		// 如果有依赖关系，需要替换提取的变量（使用本地上下文）
-		if w.apiSelector.HasDependencies() {
-			apiCfg = w.replaceExtractedVarsLocal(apiCfg)
-		}
-
-		// 解析动态变量
-		apiCfg = w.resolveAPIConfigVariables(apiCfg)
-	} else if w.reqBuilder != nil {
-		// 单API模式：使用请求构建器
-		req = w.reqBuilder.Build()
-
-		// 解析动态变量
-		req = w.resolveRequestVariables(req)
-	} else {
-		logger.Default.Error("Worker既没有API选择器也没有请求构建器")
-		return
+// checkControlState 检查控制状态（停止/暂停）返回 true 表示应该退出
+func (w *Worker) checkControlState() bool {
+	if w.controller.IsStopped() {
+		return true
 	}
-
-	if req == nil && apiCfg != nil {
-		req = BuildRequest(apiCfg)
-	}
-
-	// 执行请求（通过中间件链）
-	resp, err := w.handler(ctx, req)
-
-	// 先提取变量（无论验证是否通过都提取）
-	var extractedVars map[string]string
-	if apiCfg != nil && len(apiCfg.Extractors) > 0 && resp != nil {
-		extractedVars = w.extractAndStoreVarsLocal(apiCfg, req, resp)
-	}
-
-	// 标记验证是否成功
-	verifySuccess := true
-
-	// 如果请求本身失败，标记为失败
-	if apiCfg != nil && err != nil {
-		verifySuccess = false
-		w.markAPIFailedLocal(apiCfg.Name)
-		logger.Default.Errorf("❌ Worker %d: API [%s] 请求失败: %v，后续依赖的API将被跳过", w.id, apiCfg.Name, err)
-	} else if apiCfg != nil && len(apiCfg.Verify) > 0 && resp != nil {
-		// 如果有API级别的验证配置，执行验证
-		verifyErr := w.executeVerifications(apiCfg, resp)
-		if verifyErr != nil {
-			err = verifyErr
-			// 检查是否所有验证都设置了 continue_on_failure
-			allContinueOnFailure := true
-			for _, verify := range apiCfg.Verify {
-				if !verify.ContinueOnFailure {
-					allContinueOnFailure = false
-					break
-				}
-			}
-
-			if !allContinueOnFailure {
-				verifySuccess = false
-				// 标记为本地失败
-				w.markAPIFailedLocal(apiCfg.Name)
-				logger.Default.Errorf("❌ Worker %d: API [%s] 验证失败: %v，后续依赖的API将被跳过", w.id, apiCfg.Name, verifyErr)
-			} else {
-				// 所有验证都设置了忽略失败，记录警告但不阻断后续
-				logger.Default.Warnf("⚠️  Worker %d: API [%s] 验证失败: %v，但已设置忽略错误，继续执行后续 API", w.id, apiCfg.Name, verifyErr)
-				verifySuccess = true // 设置为成功，以便继续执行
-				err = nil            // 清除错误，不影响后续执行
-			}
-		}
-	}
-
-	// 如果验证失败，依然使用提取的变量（可能为空或默认值）
-	if !verifySuccess && len(extractedVars) > 0 {
-		logger.Default.Warnf("⚠️  Worker %d: API [%s] 验证失败，但已提取 %d 个变量（可能为空或默认值）", w.id, apiCfg.Name, len(extractedVars))
-	}
-
-	// 记录结果（包含提取的变量）
-	result := BuildRequestResult(resp, err)
-	result.ExtractedVars = extractedVars
-	// 设置 APIName（非依赖模式下 GroupID 保持为 0）
-	if apiCfg != nil {
-		result.APIName = apiCfg.Name
-	}
-	w.collector.Collect(result)
+	return WaitWhilePaused(w.controller)
 }
 
-// executeRequestByName 按名称执行指定的 API（用于依赖链模式）
-func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resolver *DependencyResolver, groupID uint64) {
-	// 从 resolver 获取 API 配置（即使要跳过也需要配置信息）
-	api := resolver.GetAPI(apiName)
-	if api == nil {
-		logger.Default.Errorf("Worker %d: 找不到 API [%s]", w.id, apiName)
+// executeRequestUnified 统一的请求执行方法（消除重复代码）
+func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource) {
+	// 创建请求上下文
+	reqCtx, err := NewRequestContext(source, w.id, w.depContext)
+	if err != nil {
+		w.logger.Errorf("❌ Worker %d: %v", w.id, err)
 		return
 	}
 
-	// 构建 API 请求配置（深拷贝 Headers 避免并发问题）
-	apiCfg := &APIRequestConfig{
-		Name:       api.Name,
-		URL:        api.URL,
-		Method:     api.Method,
-		Headers:    copyHeaders(api.Headers),
-		Body:       api.Body,
-		Verify:     api.Verify,
-		Extractors: api.Extractors,
-	}
+	apiCfg := reqCtx.APIConfig
+	groupID := reqCtx.GroupID
 
 	// 检查是否应该跳过
-	if w.shouldSkipAPI(apiName) {
-		// 替换提取的变量（保留完整配置）
-		apiCfg = w.replaceExtractedVarsLocal(apiCfg)
-		apiCfg = w.resolveAPIConfigVariables(apiCfg)
-
-		// 找出具体失败的依赖API
-		failedDeps := w.getFailedDependencies(apiName)
-		skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
-
-		// 跳过该API，记录完整配置但标记为跳过
-		result := &RequestResult{
-			Success:    false,
-			Skipped:    true,
-			SkipReason: skipReason,
-			GroupID:    groupID,
-			APIName:    apiName,
-			StatusCode: 0,
-			Duration:   0,
-			Error:      fmt.Errorf("%s", skipReason),
-			Timestamp:  time.Now(),
-			URL:        apiCfg.URL,
-			Method:     apiCfg.Method,
-			Headers:    apiCfg.Headers,
-			Body:       apiCfg.Body,
-			// 记录配置的验证规则
-			Verifications: w.buildPlannedVerifications(apiCfg),
-		}
-		w.collector.Collect(result)
-		logger.Default.Warnf("⏭️  Worker %d: 跳过 API [%s]，%s", w.id, apiName, skipReason)
+	if w.shouldSkipAPI(apiCfg.Name) {
+		w.recordSkippedRequest(apiCfg, groupID)
 		return
 	}
 
-	// 从 resolver 获取 API 配置
-	api = resolver.GetAPI(apiName)
-	if api == nil {
-		logger.Default.Errorf("Worker %d: 找不到 API [%s]", w.id, apiName)
-		return
-	}
-
-	// 构建 API 请求配置（深拷贝 Headers 避免并发问题）
-	apiCfg = &APIRequestConfig{
-		Name:       api.Name,
-		URL:        api.URL,
-		Method:     api.Method,
-		Headers:    copyHeaders(api.Headers),
-		Body:       api.Body,
-		Verify:     api.Verify,
-		Extractors: api.Extractors,
-	}
-
-	// 替换提取的变量（使用本地上下文）
-	apiCfg = w.replaceExtractedVarsLocal(apiCfg)
-
-	// 解析动态变量
-	apiCfg = w.resolveAPIConfigVariables(apiCfg)
+	// 使用统一的变量替换器（同时处理提取变量和动态变量）
+	replacer := NewVariableReplacer(w.varResolver, w.depContext.extractedVars)
+	apiCfg = replacer.ReplaceInAPIConfig(apiCfg)
 
 	// 构建请求
 	req := BuildRequest(apiCfg)
 
-	// 执行请求
+	// 执行请求（通过中间件链）
 	resp, err := w.handler(ctx, req)
 
 	// 先提取变量（无论验证是否通过都提取）
@@ -418,19 +212,69 @@ func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resol
 		extractedVars = w.extractAndStoreVarsLocal(apiCfg, req, resp)
 	}
 
-	// 标记验证是否成功
+	// 验证和错误处理
+	verifySuccess := w.handleVerificationAndErrors(apiCfg, resp, err)
+
+	// 如果验证失败，依然使用提取的变量（可能为空或默认值）
+	if !verifySuccess && len(extractedVars) > 0 {
+		w.logger.Warnf("⚠️  Worker %d: API [%s] 验证失败，但已提取 %d 个变量（可能为空或默认值）", w.id, apiCfg.Name, len(extractedVars))
+	}
+
+	// 记录结果
+	result := BuildRequestResult(resp, err)
+	result.ExtractedVars = extractedVars
+	result.APIName = apiCfg.Name
+	result.GroupID = groupID
+	w.collector.Collect(result)
+}
+
+// recordSkippedRequest 记录跳过的请求
+func (w *Worker) recordSkippedRequest(apiCfg *APIConfig, groupID uint64) {
+	// 使用统一的变量替换器
+	replacer := NewVariableReplacer(w.varResolver, w.depContext.extractedVars)
+	apiCfg = replacer.ReplaceInAPIConfig(apiCfg)
+
+	// 找出具体失败的依赖API
+	failedDeps := w.getFailedDependencies(apiCfg.Name)
+	skipReason := fmt.Sprintf("依赖的API失败: %s", strings.Join(failedDeps, ", "))
+
+	// 跳过该API，记录完整配置但标记为跳过
+	result := &RequestResult{
+		Success:       false,
+		Skipped:       true,
+		SkipReason:    skipReason,
+		GroupID:       groupID,
+		APIName:       apiCfg.Name,
+		StatusCode:    0,
+		Duration:      0,
+		Error:         fmt.Errorf("%s", skipReason),
+		Timestamp:     time.Now(),
+		URL:           apiCfg.URL,
+		Method:        apiCfg.Method,
+		Headers:       apiCfg.Headers,
+		Body:          apiCfg.Body,
+		Verifications: w.buildPlannedVerifications(apiCfg),
+	}
+	w.collector.Collect(result)
+	w.logger.Warnf("⏭️  Worker %d: 跳过 API [%s]，%s", w.id, apiCfg.Name, skipReason)
+}
+
+// handleVerificationAndErrors 处理验证和错误
+func (w *Worker) handleVerificationAndErrors(apiCfg *APIConfig, resp *Response, err error) bool {
 	verifySuccess := true
 
 	// 如果请求本身失败，标记为失败
 	if err != nil {
 		verifySuccess = false
 		w.markAPIFailedLocal(apiCfg.Name)
-		logger.Default.Errorf("❌ Worker %d: API [%s] 请求失败: %v，后续依赖的API将被跳过", w.id, apiCfg.Name, err)
-	} else if len(apiCfg.Verify) > 0 && resp != nil {
-		// 如果有验证配置，执行验证
+		w.logger.Errorf("❌ Worker %d: API [%s] 请求失败: %v，后续依赖的API将被跳过", w.id, apiCfg.Name, err)
+		return verifySuccess
+	}
+
+	// 如果有API级别的验证配置，执行验证
+	if len(apiCfg.Verify) > 0 && resp != nil {
 		verifyErr := w.executeVerifications(apiCfg, resp)
 		if verifyErr != nil {
-			err = verifyErr
 			// 检查是否所有验证都设置了 continue_on_failure
 			allContinueOnFailure := true
 			for _, verify := range apiCfg.Verify {
@@ -442,107 +286,34 @@ func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resol
 
 			if !allContinueOnFailure {
 				verifySuccess = false
-				// 标记为本地失败
 				w.markAPIFailedLocal(apiCfg.Name)
-				logger.Default.Errorf("❌ Worker %d: API [%s] 验证失败: %v，后续依赖的API将被跳过", w.id, apiCfg.Name, verifyErr)
+				w.logger.Errorf("❌ Worker %d: API [%s] 验证失败: %v，后续依赖的API将被跳过", w.id, apiCfg.Name, verifyErr)
 			} else {
-				// 所有验证都设置了忽略失败，记录警告但不阻断后续
-				logger.Default.Warnf("⚠️  Worker %d: API [%s] 验证失败: %v，但已设置忽略错误，继续执行后续 API", w.id, apiCfg.Name, verifyErr)
-				verifySuccess = true // 设置为成功，以便继续执行
-				err = nil            // 清除错误，不影响后续执行
+				w.logger.Warnf("⚠️  Worker %d: API [%s] 验证失败: %v，但已设置忽略错误，继续执行后续 API", w.id, apiCfg.Name, verifyErr)
 			}
 		}
 	}
 
-	// 如果验证失败，依然使用提取的变量（可能为空或默认值）
-	if !verifySuccess && len(extractedVars) > 0 {
-		logger.Default.Warnf("⚠️  Worker %d: API [%s] 验证失败，但已提取 %d 个变量（可能为空或默认值）", w.id, apiCfg.Name, len(extractedVars))
-	}
-
-	// 记录结果（包含提取的变量）
-	result := BuildRequestResult(resp, err)
-	result.GroupID = groupID
-	result.APIName = apiName
-	result.ExtractedVars = extractedVars
-	w.collector.Collect(result)
+	return verifySuccess
 }
 
-// resolveAPIConfigVariables 解析API配置中的动态变量
-func (w *Worker) resolveAPIConfigVariables(apiCfg *APIRequestConfig) *APIRequestConfig {
-	if apiCfg == nil || w.varResolver == nil {
-		return apiCfg
+// executeRequest 执行单次请求（统一方法）
+func (w *Worker) executeRequest(ctx context.Context) {
+	if w.apiSelector == nil {
+		w.logger.Error("Worker 缺少 API选择器")
+		return
 	}
 
-	w.resolveString(&apiCfg.URL)
-	w.resolveString(&apiCfg.Body)
-	apiCfg.Headers = w.resolveHeaders(apiCfg.Headers)
-
-	return apiCfg
+	// 统一使用 APISource
+	source := NewAPISource(w.apiSelector, w.logger)
+	w.executeRequestUnified(ctx, source)
 }
 
-// resolveRequestVariables 解析请求中的动态变量
-func (w *Worker) resolveRequestVariables(req *Request) *Request {
-	if req == nil || w.varResolver == nil {
-		return req
-	}
-
-	w.resolveString(&req.URL)
-	w.resolveString(&req.Body)
-	req.Headers = w.resolveHeaders(req.Headers)
-
-	return req
-}
-
-// resolveString 解析单个字符串变量
-func (w *Worker) resolveString(s *string) {
-	if *s != "" {
-		if resolved, err := w.varResolver.Resolve(*s); err == nil {
-			*s = resolved
-		}
-	}
-}
-
-// resolveHeaders 解析Headers中的变量（返回新的map，不修改原map）
-func (w *Worker) resolveHeaders(headers map[string]string) map[string]string {
-	if headers == nil {
-		return nil
-	}
-
-	// 创建新的 map，避免并发写入问题
-	newHeaders := make(map[string]string, len(headers))
-	for k, v := range headers {
-		if resolved, err := w.varResolver.Resolve(v); err == nil {
-			newHeaders[k] = resolved
-		} else {
-			newHeaders[k] = v
-		}
-	}
-	return newHeaders
-}
-
-// replaceExtractedVarsLocal 使用本地上下文替换API配置中的提取变量
-func (w *Worker) replaceExtractedVarsLocal(apiCfg *APIRequestConfig) *APIRequestConfig {
-	if len(w.depContext.extractedVars) == 0 {
-		return apiCfg
-	}
-
-	// 复制配置避免修改原始数据
-	newCfg := &APIRequestConfig{
-		Name:       apiCfg.Name,
-		URL:        replaceVars(apiCfg.URL, w.depContext.extractedVars),
-		Method:     apiCfg.Method,
-		Headers:    make(map[string]string),
-		Body:       replaceVars(apiCfg.Body, w.depContext.extractedVars),
-		Verify:     apiCfg.Verify,
-		Extractors: apiCfg.Extractors,
-	}
-
-	// 替换headers中的变量
-	for k, v := range apiCfg.Headers {
-		newCfg.Headers[k] = replaceVars(v, w.depContext.extractedVars)
-	}
-
-	return newCfg
+// executeRequestByName 按名称执行指定的 API（用于依赖链模式）
+func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resolver *DependencyResolver, groupID uint64) {
+	// 创建依赖链API请求源（统一执行逻辑）
+	source := NewDependencyAPISource(apiName, resolver, groupID, w.logger)
+	w.executeRequestUnified(ctx, source)
 }
 
 // markAPIFailedLocal 标记API在本地上下文中失败
@@ -602,7 +373,7 @@ func (w *Worker) getFailedDependencies(apiName string) []string {
 }
 
 // buildPlannedVerifications 构建计划的验证规则（虽未执行，但记录配置）
-func (w *Worker) buildPlannedVerifications(apiCfg *APIRequestConfig) []VerificationResult {
+func (w *Worker) buildPlannedVerifications(apiCfg *APIConfig) []VerificationResult {
 	if len(apiCfg.Verify) == 0 {
 		return nil
 	}
@@ -632,7 +403,7 @@ func replaceVars(text string, vars map[string]string) string {
 }
 
 // extractAndStoreVarsLocal 提取响应数据并存储到本地上下文，并返回提取的原始变量
-func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, req *Request, resp *Response) map[string]string {
+func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIConfig, req *Request, resp *Response) map[string]string {
 	// 构建默认值映射
 	defaultValues := make(map[string]string)
 	for _, extCfg := range apiCfg.Extractors {
@@ -642,9 +413,9 @@ func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, req *Request
 	}
 
 	// 创建提取器管理器
-	manager, err := NewExtractorManager(apiCfg.Extractors)
+	manager, err := NewExtractorManager(apiCfg.Extractors, w.logger)
 	if err != nil {
-		logger.Default.Errorf("Worker %d: 创建提取器失败 [%s]: %v", w.id, apiCfg.Name, err)
+		w.logger.Errorf("Worker %d: 创建提取器失败 [%s]: %v", w.id, apiCfg.Name, err)
 		return nil
 	}
 
@@ -665,14 +436,14 @@ func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, req *Request
 			key := fmt.Sprintf("%s.%s", apiCfg.Name, k)
 			w.depContext.extractedVars[key] = v
 		}
-		logger.Default.Infof("📦 Worker %d: API [%s] 提取了 %d 个变量", w.id, apiCfg.Name, len(extractedVars))
+		w.logger.Infof("📦 Worker %d: API [%s] 提取了 %d 个变量", w.id, apiCfg.Name, len(extractedVars))
 	}
 
 	return extractedVars
 }
 
 // executeVerifications 执行API级别的验证
-func (w *Worker) executeVerifications(apiCfg *APIRequestConfig, resp *Response) error {
+func (w *Worker) executeVerifications(apiCfg *APIConfig, resp *Response) error {
 	for _, verifyCfg := range apiCfg.Verify {
 		// 复制验证配置，以便修改而不影响原配置
 		verifyConfig := verifyCfg

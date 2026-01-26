@@ -13,11 +13,14 @@ package executor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/statistics"
+	"github.com/kamalyes/go-toolbox/pkg/mathx"
+	"github.com/kamalyes/go-toolbox/pkg/syncx"
 	"github.com/kamalyes/go-toolbox/pkg/units"
 )
 
@@ -29,25 +32,28 @@ type ProgressTracker struct {
 	collector     *statistics.Collector
 	workerCount   uint64
 	headerPrinted bool // 标记是否已打印表头
+	logger        logger.ILogger
 }
 
 // NewProgressTracker 创建进度跟踪器
-func NewProgressTracker(total uint64) *ProgressTracker {
+func NewProgressTracker(total uint64, log logger.ILogger) *ProgressTracker {
 	return &ProgressTracker{
 		total:     total,
 		completed: 0,
 		startTime: time.Now(),
+		logger:    log,
 	}
 }
 
 // NewProgressTrackerWithCollector 创建带统计收集器的进度跟踪器
-func NewProgressTrackerWithCollector(total uint64, collector *statistics.Collector, workerCount uint64) *ProgressTracker {
+func NewProgressTrackerWithCollector(total uint64, collector *statistics.Collector, workerCount uint64, log logger.ILogger) *ProgressTracker {
 	return &ProgressTracker{
 		total:       total,
 		completed:   0,
 		startTime:   time.Now(),
 		collector:   collector,
 		workerCount: workerCount,
+		logger:      log,
 	}
 }
 
@@ -64,34 +70,27 @@ func (pt *ProgressTracker) GetProgress() (completed, total uint64, percentage fl
 	return
 }
 
-// Start 启动进度显示
+// Start 启动进度显示 - 使用 EventLoop
 func (pt *ProgressTracker) Start(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	logger.Default.Info("")
-	logger.Default.Info("🚀 压测进行中...")
-	logger.Default.Info("")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+	pt.logger.Info("🚀 压测进行中...")
+	// 使用 EventLoop 统一管理定时任务
+	syncx.NewEventLoop(ctx).
+		OnTicker(time.Second, func() {
 			elapsed := time.Since(pt.startTime)
-			if elapsed < time.Second {
-				continue
+			if elapsed >= time.Second {
+				pt.printProgress(elapsed)
 			}
-
-			pt.printProgress(elapsed)
-		}
-	}
+		}).
+		Run()
 }
 
 // printProgress 打印进度行
 func (pt *ProgressTracker) printProgress(elapsed time.Duration) {
+	mathx.When(pt.collector == nil).
+		Then(func() { pt.printSimpleProgress(elapsed) }).
+		Do()
+
 	if pt.collector == nil {
-		pt.printSimpleProgress(elapsed)
 		return
 	}
 
@@ -106,57 +105,34 @@ func (pt *ProgressTracker) printProgress(elapsed time.Duration) {
 
 	// 构建状态码统计字符串
 	statusCodes := pt.collector.GetStatusCodes()
-	statusStr := ""
-	for code, count := range statusCodes {
-		if statusStr != "" {
-			statusStr += " "
-		}
-		statusStr += fmt.Sprintf("%d:%d", code, count)
-	}
-	if statusStr == "" {
-		statusStr = "-"
-	}
+	statusStr := mathx.IfEmpty(buildStatusStr(statusCodes), "-")
 
-	// 打印表头（仅第一次）
+	// 第一次显示时打印表头
 	if !pt.headerPrinted {
-		pt.printTableHeader()
+		pt.logger.Info("")
+		pt.logger.Info("┌──────┬────────┬────────┬────────┬──────┬──────────┬──────────┬──────────┬──────────┬─────────┬────────┐")
+		pt.logger.Info("│ 耗时 │ 并发数 │ 成功数 │ 失败数 │ QPS  │ 最长耗时 │ 最短耗时 │ 平均耗时 │ 下载字节 │ 字节/秒 │ 状态码 │")
+		pt.logger.Info("├──────┼────────┼────────┼────────┼──────┼──────────┼──────────┼──────────┼──────────┼─────────┼────────┤")
 		pt.headerPrinted = true
 	}
 
-	// 打印数据行
-	minDur := "-"
-	maxDur := "-"
-	avgDur := "-"
-	if stats.MinLatency < time.Hour {
-		minDur = fmt.Sprintf("%.2fms", float64(stats.MinLatency.Microseconds())/1000)
-	}
-	if stats.MaxLatency > 0 {
-		maxDur = fmt.Sprintf("%.2fms", float64(stats.MaxLatency.Microseconds())/1000)
-	}
-	if stats.AvgLatency > 0 {
-		avgDur = fmt.Sprintf("%.2fms", float64(stats.AvgLatency.Microseconds())/1000)
-	}
+	// 格式化每个字段
+	timeStr := fmt.Sprintf("%-4s", fmt.Sprintf("%ds", int(seconds)))
+	concurrencyStr := fmt.Sprintf("%-6d", pt.workerCount)
+	successStr := fmt.Sprintf("%-6d", stats.SuccessRequests)
+	failedStr := fmt.Sprintf("%-6d", stats.FailedRequests)
+	qpsStr := fmt.Sprintf("%4.2f", qps)
+	maxLatencyStr := fmt.Sprintf("%-8s", formatLatency(stats.MaxLatency))
+	minLatencyStr := fmt.Sprintf("%-8s", formatLatency(stats.MinLatency))
+	avgLatencyStr := fmt.Sprintf("%-8s", formatLatency(stats.AvgLatency))
+	bytesStr := fmt.Sprintf("%-8s", units.BytesSize(float64(stats.TotalSize)))
+	bytesPerSecStr := fmt.Sprintf("%-7s", units.BytesSize(bytesPerSec))
+	statusCodeStr := fmt.Sprintf("%-6s", statusStr)
 
-	logger.Default.Infof("│ %4ds │ %6d │ %6d │ %6d │ %7.2f │ %8s │ %8s │ %8s │ %9s │ %9s │ %-11s │",
-		int(seconds),
-		pt.workerCount,
-		stats.SuccessRequests,
-		stats.FailedRequests,
-		qps,
-		maxDur,
-		minDur,
-		avgDur,
-		units.BytesSize(float64(stats.TotalSize)),
-		units.BytesSize(bytesPerSec),
-		statusStr,
-	)
-}
-
-// printTableHeader 打印表格表头
-func (pt *ProgressTracker) printTableHeader() {
-	logger.Default.Info("┌──────┬────────┬────────┬────────┬─────────┬──────────┬──────────┬──────────┬───────────┬───────────┬─────────────┐")
-	logger.Default.Info("│ 耗时 │ 并发数 │ 成功数 │ 失败数 │   QPS   │ 最长耗时 │ 最短耗时 │ 平均耗时 │  下载字节 │  字节/秒  │   状态码    │")
-	logger.Default.Info("├──────┼────────┼────────┼────────┼─────────┼──────────┼──────────┼──────────┼───────────┼───────────┼─────────────┤")
+	// 只打印数据行，不打印底部边框（底部边框在 Complete() 中打印）
+	pt.logger.Info("│ %s │ %s │ %s │ %s │ %s │ %s │ %s │ %s │ %s │ %s │ %s │",
+		timeStr, concurrencyStr, successStr, failedStr, qpsStr,
+		maxLatencyStr, minLatencyStr, avgLatencyStr, bytesStr, bytesPerSecStr, statusCodeStr)
 }
 
 // printSimpleProgress 打印简单进度（无收集器模式）
@@ -174,37 +150,47 @@ func (pt *ProgressTracker) printSimpleProgress(elapsed time.Duration) {
 	// 计算QPS
 	qps := float64(completed) / elapsed.Seconds()
 
-	// 打印表头（仅第一次）
-	if !pt.headerPrinted {
-		logger.Default.Info("┌──────────────────────┬──────────────┬──────────────┬─────────┬────────┐")
-		logger.Default.Info("│       进度           │     耗时     │   预计剩余   │   QPS   │ 并发数 │")
-		logger.Default.Info("├──────────────────────┼──────────────┼──────────────┼─────────┼────────┤")
-		pt.headerPrinted = true
+	// 构建表格数据
+	tableData := []map[string]interface{}{
+		{
+			"进度":   fmt.Sprintf("%d/%d (%.2f%%)", completed, total, percentage),
+			"耗时":   elapsed.Round(time.Second).String(),
+			"预计剩余": eta.Round(time.Second).String(),
+			"QPS":  fmt.Sprintf("%.2f", qps),
+			"并发数":  pt.workerCount,
+		},
 	}
 
-	// 打印数据行
-	logger.Default.Infof("│ %6d/%6d (%5.2f%%) │ %12s │ %12s │ %7.2f │ %6d │",
-		completed, total, percentage,
-		elapsed.Round(time.Second).String(),
-		eta.Round(time.Second).String(),
-		qps,
-		pt.workerCount,
-	)
+	// 使用 ConsoleTable 显示数据
+	pt.logger.ConsoleTable(tableData)
 }
 
 // Complete 完成并打印底部边框
 func (pt *ProgressTracker) Complete() {
-	if !pt.headerPrinted {
-		return
+	// 如果显示过表头，打印表格底部
+	if pt.headerPrinted {
+		pt.logger.Info("└──────┴────────┴────────┴────────┴──────┴──────────┴──────────┴──────────┴──────────┴─────────┴────────┘")
+	}
+	pt.logger.Info("🎉 压测完成！")
+}
+
+// buildStatusStr 构建状态码统计字符串
+func buildStatusStr(statusCodes map[int]uint64) string {
+	if len(statusCodes) == 0 {
+		return ""
 	}
 
-	// 根据是否有收集器打印不同的底部边框
-	if pt.collector != nil {
-		// 完整统计模式
-		logger.Default.Info("└──────┴────────┴────────┴────────┴─────────┴──────────┴──────────┴──────────┴───────────┴───────────┴─────────────┘")
-	} else {
-		// 简单进度模式
-		logger.Default.Info("└──────────────────────┴──────────────┴──────────────┴─────────┴────────┘")
+	var parts []string
+	for code, count := range statusCodes {
+		parts = append(parts, fmt.Sprintf("%d:%d", code, count))
 	}
-	logger.Default.Info("")
+	return strings.Join(parts, " ")
+}
+
+// formatLatency 格式化延迟时间
+func formatLatency(latency time.Duration) string {
+	return mathx.WhenValue[string](latency > 0 && latency < time.Hour).
+		ThenReturn(fmt.Sprintf("%.2fms", float64(latency.Microseconds())/1000)).
+		ElseReturn("-").
+		Get()
 }

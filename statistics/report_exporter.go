@@ -1,12 +1,12 @@
 /*
  * @Author: kamalyes 501893067@qq.com
- * @Date: 2025-12-30 00:00:00
+ * @Date: 2026-01-26 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-24 10:00:00
- * @FilePath: \go-stress\statistics\html_report.go
- * @Description: HTML报告生成器（重构后：使用 Builder + Formatter 架构）
+ * @LastEditTime: 2026-01-26 21:00:00
+ * @FilePath: \go-stress\statistics\report_exporter.go
+ * @Description: 报告导出器 - 职责单一化重构
  *
- * Copyright (c) 2025 by kamalyes, All Rights Reserved.
+ * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
 package statistics
 
@@ -18,19 +18,34 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-logger"
 )
 
-// GenerateHTMLReport 生成HTML报告 - 使用新架构（Builder + Formatter）
-func (c *Collector) GenerateHTMLReport(totalTime time.Duration, filename string) error {
-	return c.GenerateHTMLReportWithLimit(totalTime, filename, -1) // -1 表示导出全部详情
+// ReportExporter 报告导出器（职责单一：只负责导出报告到文件）
+type ReportExporter struct {
+	collector *Collector
+	builder   *ReportBuilder
+	logger    logger.ILogger
 }
 
-// GenerateHTMLReportWithLimit 生成HTML报告（指定详情导出数量）
-func (c *Collector) GenerateHTMLReportWithLimit(totalTime time.Duration, filename string, detailsLimit int) error {
+// NewReportExporter 创建报告导出器
+func NewReportExporter(collector *Collector) *ReportExporter {
+	return &ReportExporter{
+		collector: collector,
+		builder:   NewReportBuilder(collector),
+		logger:    collector.logger,
+	}
+}
+
+// ExportHTML 导出HTML报告（完整版，包含明细）
+func (e *ReportExporter) ExportHTML(totalTime time.Duration, filename string) error {
+	return e.ExportHTMLWithLimit(totalTime, filename, -1) // -1 表示导出全部详情
+}
+
+// ExportHTMLWithLimit 导出HTML报告（指定详情导出数量）
+func (e *ReportExporter) ExportHTMLWithLimit(totalTime time.Duration, filename string, detailsLimit int) error {
 	// 第一步：使用 ReportBuilder 构建完整报告（包含明细）
-	builder := NewReportBuilder(c)
-	report := builder.BuildFullReportWithLimit(totalTime, detailsLimit)
+	report := e.builder.BuildFullReportWithLimit(totalTime, detailsLimit)
 
 	// 第二步：生成报告目录和文件名
 	reportDir := filepath.Dir(filename)
@@ -46,10 +61,10 @@ func (c *Collector) GenerateHTMLReportWithLimit(totalTime time.Duration, filenam
 	if err := os.WriteFile(jsonFullPath, jsonBytes, 0644); err != nil {
 		return fmt.Errorf("write JSON file failed: %w", err)
 	}
-	logger.Default.Info("✅ JSON数据已生成: %s", jsonFullPath)
+	e.logger.Info("✅ JSON数据已生成: %s", jsonFullPath)
 
 	// 第四步：生成静态资源文件（CSS、JS）
-	if err := generateStaticFiles(reportDir, jsonFilename); err != nil {
+	if err := e.generateStaticFiles(reportDir, jsonFilename); err != nil {
 		return fmt.Errorf("generate static files failed: %w", err)
 	}
 
@@ -68,25 +83,46 @@ func (c *Collector) GenerateHTMLReportWithLimit(totalTime time.Duration, filenam
 		return fmt.Errorf("write file failed: %w", err)
 	}
 
-	logger.Default.Info("✅ HTML报告已生成: %s", filename)
+	e.logger.Info("✅ HTML报告已生成: %s", filename)
+	return nil
+}
+
+// ExportJSON 导出JSON报告
+func (e *ReportExporter) ExportJSON(totalTime time.Duration, filename string, includeDetails bool) error {
+	// 使用 ReportBuilder 构建报告
+	report := e.builder.BuildReport(totalTime, includeDetails)
+
+	// 使用 JSONFormatter 格式化
+	formatter := &JSONFormatter{Indent: true}
+	jsonBytes, err := formatter.Format(report)
+	if err != nil {
+		return fmt.Errorf("format JSON failed: %w", err)
+	}
+
+	// 写入文件
+	if err := os.WriteFile(filename, jsonBytes, 0644); err != nil {
+		return fmt.Errorf("write file failed: %w", err)
+	}
+
+	e.logger.Info("✅ JSON报告已生成: %s", filename)
 	return nil
 }
 
 // generateStaticFiles 生成静态资源文件（CSS、JS）
-func generateStaticFiles(reportDir, jsonFilename string) error {
+func (e *ReportExporter) generateStaticFiles(reportDir, jsonFilename string) error {
 	// 生成 CSS 文件
 	cssPath := filepath.Join(reportDir, "report.css")
 	if err := os.WriteFile(cssPath, []byte(reportCSS), 0644); err != nil {
 		return fmt.Errorf("write CSS file failed: %w", err)
 	}
-	logger.Default.Info("✅ CSS文件已生成: %s", cssPath)
+	e.logger.Info("✅ CSS文件已生成: %s", cssPath)
 
 	// 生成 report_actions.js 文件
 	actionsJsPath := filepath.Join(reportDir, "report_actions.js")
 	if err := os.WriteFile(actionsJsPath, []byte(reportActionsJS), 0644); err != nil {
 		return fmt.Errorf("write Actions JS file failed: %w", err)
 	}
-	logger.Default.Info("✅ Actions JS文件已生成: %s", actionsJsPath)
+	e.logger.Info("✅ Actions JS文件已生成: %s", actionsJsPath)
 
 	// 生成 JS 文件（静态模式：IS_REALTIME = false，替换JSON文件名占位符）
 	jsContent := strings.ReplaceAll(reportJS, "IS_REALTIME_PLACEHOLDER", "false")
@@ -95,7 +131,8 @@ func generateStaticFiles(reportDir, jsonFilename string) error {
 	if err := os.WriteFile(jsPath, []byte(jsContent), 0644); err != nil {
 		return fmt.Errorf("write JS file failed: %w", err)
 	}
-	logger.Default.Info("✅ JS文件已生成: %s", jsPath)
+	e.logger.Info("✅ JS文件已生成: %s", jsPath)
 
 	return nil
 }
+

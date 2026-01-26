@@ -11,12 +11,14 @@
 package config
 
 import (
+	"os"
 	"testing"
 
+	"github.com/kamalyes/go-stress/logger"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseCurlCommand(t *testing.T) {
+func TestNewCurlParser(t *testing.T) {
 	curlCmd := `curl 'http://localhost:8081/v1/messages/send' \
   -H 'Accept: application/json' \
   -H 'Content-Type: application/json' \
@@ -24,7 +26,7 @@ func TestParseCurlCommand(t *testing.T) {
   --data-raw '{"content":"test-message","priority":1}' \
   --insecure`
 
-	cfg, err := ParseCurlCommand(curlCmd)
+	cfg, err := NewCurlParser(curlCmd, logger.New())
 	assert.NoError(t, err, "解析curl命令失败")
 
 	// 验证URL
@@ -53,7 +55,10 @@ func TestParseCurlCommand(t *testing.T) {
 
 func TestParseCurlFile(t *testing.T) {
 	// 测试解析curl文件
-	cfg, err := ParseCurlFile("../testserver/example.curl.txt")
+	data, err := os.ReadFile("../testserver/example.curl.txt")
+	assert.NoError(t, err, "读取curl文件失败")
+
+	cfg, err := NewCurlParser(string(data), logger.New())
 	assert.NoError(t, err, "解析curl文件失败")
 	assert.NotEmpty(t, cfg.URL, "URL解析失败")
 	assert.NotEmpty(t, cfg.Method, "方法解析失败")
@@ -67,7 +72,7 @@ func TestParseCurlFile(t *testing.T) {
 func TestParseCurlWithDoubleQuotes(t *testing.T) {
 	curlCmd := `curl "http://example.com/api" -H "Content-Type: application/json" -X POST --data "{\"key\":\"value\"}"`
 
-	cfg, err := ParseCurlCommand(curlCmd)
+	cfg, err := NewCurlParser(curlCmd, logger.New())
 	assert.NoError(t, err, "解析curl命令失败")
 	assert.Equal(t, "http://example.com/api", cfg.URL, "URL解析错误")
 	assert.Equal(t, "POST", cfg.Method, "方法解析错误")
@@ -78,7 +83,7 @@ func TestParseCurlWithDoubleQuotes(t *testing.T) {
 func TestParseCurlGET(t *testing.T) {
 	curlCmd := `curl 'https://api.example.com/users/123' -H 'Accept: application/json'`
 
-	cfg, err := ParseCurlCommand(curlCmd)
+	cfg, err := NewCurlParser(curlCmd, logger.New())
 	assert.NoError(t, err, "解析curl命令失败")
 	assert.Equal(t, "GET", cfg.Method, "GET方法解析错误")
 	assert.Empty(t, cfg.Body, "GET请求不应该有body")
@@ -100,7 +105,7 @@ func TestParseCurlUnixStyle(t *testing.T) {
   --data-raw '{"session_id":"08884d6d8d9fffa5456a359f67b48843","sender_id":"1991706697093091328","content":"👤 测试内容","priority":2}' \
   --insecure`
 
-	cfg, err := ParseCurlCommand(curlCmd)
+	cfg, err := NewCurlParser(curlCmd, logger.New())
 	assert.NoError(t, err, "解析Unix风格curl命令失败")
 
 	// 验证URL
@@ -131,7 +136,7 @@ func TestParseCurlWindowsStyle(t *testing.T) {
   --data-raw ^"^{^\^"session_id^\^":^\^"08884d6d8d9fffa5456a359f67b48843^\^",^\^"sender_id^\^":^\^"1991706697093091328^\^",^\^"content^\^":^\^"测试内容^\^",^\^"priority^\^":2^}^" ^
   --insecure`
 
-	cfg, err := ParseCurlCommand(curlCmd)
+	cfg, err := NewCurlParser(curlCmd, logger.New())
 	assert.NoError(t, err, "解析Windows风格curl命令失败")
 
 	// 验证URL

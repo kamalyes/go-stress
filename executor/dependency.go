@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/logger"
 )
 
 // DependencyResolver API依赖解析器
@@ -26,15 +26,17 @@ type DependencyResolver struct {
 	extractedVars  map[string]string // 提取的变量 (API name -> 变量集合)
 	failedAPIs     map[string]bool   // 验证失败的API
 	mu             sync.RWMutex
+	logger         logger.ILogger
 }
 
 // NewDependencyResolver 创建依赖解析器
-func NewDependencyResolver(apis []config.APIConfig) (*DependencyResolver, error) {
+func NewDependencyResolver(apis []config.APIConfig, log logger.ILogger) (*DependencyResolver, error) {
 	resolver := &DependencyResolver{
 		apiConfigs:    apis,
 		apiMap:        make(map[string]*config.APIConfig),
 		extractedVars: make(map[string]string),
 		failedAPIs:    make(map[string]bool),
+		logger:        log,
 	}
 
 	// 构建API映射
@@ -97,7 +99,7 @@ func (r *DependencyResolver) resolveDependencies() error {
 	}
 
 	r.executionOrder = order
-	logger.Default.Info("📋 API执行顺序: %v", r.executionOrder)
+	r.logger.Info("📋 API执行顺序: %v", r.executionOrder)
 	return nil
 }
 
@@ -160,7 +162,7 @@ func (r *DependencyResolver) MarkAPIFailed(apiName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.failedAPIs[apiName] = true
-	logger.Default.Warnf("⚠️  API [%s] 验证失败，依赖它的后续 API 将被跳过", apiName)
+	r.logger.Warnf("⚠️  API [%s] 验证失败，依赖它的后续 API 将被跳过", apiName)
 }
 
 // IsAPIFailed 检查API是否失败
@@ -183,7 +185,7 @@ func (r *DependencyResolver) ShouldSkipAPI(apiName string) bool {
 	// 检查所有依赖的API是否有失败的
 	for _, dep := range api.DependsOn {
 		if r.failedAPIs[dep] {
-			logger.Default.Warnf("⏭️  跳过 API [%s], 因为它依赖的 API [%s] 已失败", apiName, dep)
+			r.logger.Warnf("⏭️  跳过 API [%s], 因为它依赖的 API [%s] 已失败", apiName, dep)
 			return true
 		}
 	}

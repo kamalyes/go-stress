@@ -2,13 +2,15 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2026-01-23 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-23 10:00:00
+ * @LastEditTime: 2026-01-26 15:00:00
  * @FilePath: \go-stress\distributed\common\filter.go
  * @Description: Slave 筛选条件及校验方法
  *
  * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
 package common
+
+import "github.com/kamalyes/go-toolbox/pkg/types"
 
 // SlaveFilter Slave 筛选条件
 type SlaveFilter struct {
@@ -33,47 +35,21 @@ type SlaveFilter struct {
 // IsSlaveValid 检查 Slave 是否符合筛选条件
 func (f *SlaveFilter) IsSlaveValid(slave *SlaveInfo) bool {
 	// 检查 ID 包含/排除
-	if len(f.IncludeIDs) > 0 {
-		found := false
-		for _, id := range f.IncludeIDs {
-			if slave.ID == id {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
+	if len(f.IncludeIDs) > 0 && !types.Contains(f.IncludeIDs, slave.ID) {
+		return false
 	}
 
-	if len(f.ExcludeIDs) > 0 {
-		for _, id := range f.ExcludeIDs {
-			if slave.ID == id {
-				return false
-			}
-		}
+	if types.Contains(f.ExcludeIDs, slave.ID) {
+		return false
 	}
 
 	// 检查地域包含/排除
-	if len(f.IncludeRegions) > 0 {
-		found := false
-		for _, region := range f.IncludeRegions {
-			if slave.Region == region {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
+	if len(f.IncludeRegions) > 0 && !types.Contains(f.IncludeRegions, slave.Region) {
+		return false
 	}
 
-	if len(f.ExcludeRegions) > 0 {
-		for _, region := range f.ExcludeRegions {
-			if slave.Region == region {
-				return false
-			}
-		}
+	if types.Contains(f.ExcludeRegions, slave.Region) {
+		return false
 	}
 
 	// 检查标签包含/排除
@@ -90,25 +66,12 @@ func (f *SlaveFilter) IsSlaveValid(slave *SlaveInfo) bool {
 	}
 
 	// 检查状态
-	if len(f.RequiredStates) > 0 {
-		found := false
-		for _, state := range f.RequiredStates {
-			if slave.State == state {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
+	if len(f.RequiredStates) > 0 && !types.Contains(f.RequiredStates, slave.State) {
+		return false
 	}
 
-	if len(f.ExcludedStates) > 0 {
-		for _, state := range f.ExcludedStates {
-			if slave.State == state {
-				return false
-			}
-		}
+	if types.Contains(f.ExcludedStates, slave.State) {
+		return false
 	}
 
 	// 检查资源限制

@@ -14,11 +14,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-logger"
 )
 
 // CurlStyle curl命令风格
@@ -79,31 +78,21 @@ var windowsEscapes = []struct {
 type CurlParser struct {
 	raw   string
 	style CurlStyle
+
+	logger logger.ILogger
 }
 
-// ParseCurlFile 从文件解析curl命令
-func ParseCurlFile(path string) (*Config, error) {
-	if path == "" {
-		return nil, fmt.Errorf("curl文件路径不能为空")
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("读取curl文件失败: %w", err)
-	}
-
-	return ParseCurlCommand(string(data))
-}
-
-// ParseCurlCommand 解析curl命令字符串
-func ParseCurlCommand(curlCmd string) (*Config, error) {
+// NewCurlParser 创建 curl 命令解析器并解析返回配置
+func NewCurlParser(curlCmd string, log logger.ILogger) (*Config, error) {
 	style := detectCurlStyle(curlCmd)
-	logger.Default.Debug("检测到curl风格: %v", style)
-
 	parser := &CurlParser{
-		raw:   curlCmd,
-		style: style,
+		raw:    curlCmd,
+		style:  style,
+		logger: log,
 	}
+
+	parser.logger.Debug("检测到curl风格: %v", parser.style)
+
 	config, err := parser.parse()
 	if err != nil {
 		return nil, err
@@ -121,7 +110,7 @@ func detectCurlStyle(cmd string) CurlStyle {
 	backslashCount := strings.Count(cmd, "\\")
 	caretCount := strings.Count(cmd, "^")
 
-	logger.Default.Debug("检测风格 - 反斜杠: %d, 脱字符: %d", backslashCount, caretCount)
+	// 日志由调用方处理
 
 	// Windows cmd 风格特征：^ 数量 > \ 数量的 2 倍
 	if caretCount > backslashCount*2 {
@@ -302,7 +291,7 @@ func (p *CurlParser) parseBody(cmd string, config *Config) {
 	// 从data参数位置提取引号内容
 	remaining := cmd[dataIdx:]
 	if body, ok := p.extractQuotedContent(remaining); ok {
-		logger.Default.Debug("提取body成功 (前200字符): %s", truncateString(body, 200))
+		p.logger.Debug("提取body成功 (前200字符): %s", truncateString(body, 200))
 		config.Body = formatJSONIfPossible(body)
 	}
 }

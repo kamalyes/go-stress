@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kamalyes/go-stress/logger"
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-toolbox/pkg/units"
 )
 
@@ -68,13 +68,12 @@ type Report struct {
 	Protocol    string `json:"protocol,omitempty"`    // 协议类型: http/grpc/websocket
 	Concurrency uint64 `json:"concurrency,omitempty"` // 并发数
 	TotalReqs   uint64 `json:"total_reqs,omitempty"`  // 计划请求数
+	logger      logger.ILogger
 }
 
 // Print 打印报告（使用单个多列表格）
 func (r *Report) Print() {
-	logger.Default.Info("")
-	logger.Default.Info("📊 压测统计报告")
-	logger.Default.Info("")
+	r.logger.Info("📊 压测统计报告")
 
 	// 构建单个统一表格
 	reportData := []map[string]interface{}{
@@ -136,12 +135,10 @@ func (r *Report) Print() {
 		},
 	}
 
-	logger.Default.ConsoleTable(reportData)
+	r.logger.ConsoleTable(reportData)
 
 	// 错误统计（如果有）
 	if len(r.Errors) > 0 {
-		logger.Default.Info("")
-		logger.Default.Info("❌ 错误统计")
 		errorStats := make([]map[string]interface{}, 0, len(r.Errors))
 		for errMsg, count := range r.Errors {
 			// 截断过长的错误信息
@@ -153,10 +150,8 @@ func (r *Report) Print() {
 				"次数":   count,
 			})
 		}
-		logger.Default.ConsoleTable(errorStats)
+		r.logger.ConsoleTable(errorStats)
 	}
-
-	logger.Default.Info("")
 }
 
 // Summary 返回简短摘要

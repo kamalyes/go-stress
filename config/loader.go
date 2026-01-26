@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/kamalyes/go-toolbox/pkg/mathx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -105,58 +106,18 @@ func (l *Loader) mergeAPIsWithCommon(config *Config) error {
 	for i := range config.APIs {
 		api := &config.APIs[i]
 
-		// 构建完整URL
-		// 优先级：api.URL > api.Host+api.Path > config.Host+api.Path > config.URL
-		if api.URL == "" {
-			// 继承Host
-			host := api.Host
-			if host == "" && config.Host != "" {
-				host = config.Host
-			}
-
-			// 如果有Host和Path，组合成完整URL
-			if host != "" && api.Path != "" {
-				api.URL = host + api.Path
-			} else if host != "" {
-				// 只有Host没有Path，使用Host作为URL
-				api.URL = host
-			} else if api.Path != "" {
-				// 只有Path没有Host，Path就是完整URL（向后兼容）
-				api.URL = api.Path
-			} else if config.URL != "" {
-				// 使用公共URL（向后兼容）
-				api.URL = config.URL
-			}
-		}
-
-		// 如果还是没有URL，报错
+		// 构建完整URL - 优先级：api.URL > api.Host+api.Path > config.Host+api.Path > config.URL
+		api.URL = mathx.IfEmpty(api.URL, buildAPIURL(api, config))
 		if api.URL == "" {
 			return fmt.Errorf("第%d个API [%s] 的URL不能为空（需要URL或Host+Path）", i+1, api.Name)
 		}
 
-		// 继承Method
-		if api.Method == "" && config.Method != "" {
-			api.Method = config.Method
-		}
-		if api.Method == "" {
-			api.Method = "GET" // 默认值
-		}
+		// 继承公共配置
+		api.Method = mathx.IfEmpty(api.Method, mathx.IfEmpty(config.Method, "GET"))
+		api.Body = mathx.IfEmpty(api.Body, config.Body)
 
 		// 合并Headers（公共headers + API特定headers，API的优先）
-		if api.Headers == nil {
-			api.Headers = make(map[string]string)
-		}
-		// 先复制公共headers
-		for k, v := range config.Headers {
-			if _, exists := api.Headers[k]; !exists {
-				api.Headers[k] = v
-			}
-		}
-
-		// 继承Body
-		if api.Body == "" && config.Body != "" {
-			api.Body = config.Body
-		}
+		api.Headers = mergeHeaders(config.Headers, api.Headers)
 
 		// 继承Verify配置
 		if len(api.Verify) == 0 {
@@ -164,13 +125,42 @@ func (l *Loader) mergeAPIsWithCommon(config *Config) error {
 		}
 
 		// 设置默认权重
-		if api.Weight <= 0 {
-			api.Weight = 1
-		}
-
+		api.Weight = mathx.IfNotZero(api.Weight, 1)
 	}
 
 	return nil
+}
+
+// buildAPIURL 构建API完整URL
+func buildAPIURL(api *APIConfig, config *Config) string {
+	// 继承Host
+	host := mathx.IfEmpty(api.Host, config.Host)
+
+	// 如果有Host和Path，组合成完整URL
+	if host != "" && api.Path != "" {
+		return host + api.Path
+	}
+	if host != "" {
+		return host
+	}
+	if api.Path != "" {
+		return api.Path
+	}
+	return config.URL
+}
+
+// mergeHeaders 合并Headers（公共headers + API特定headers，API的优先）
+func mergeHeaders(common, specific map[string]string) map[string]string {
+	if specific == nil {
+		specific = make(map[string]string)
+	}
+	// 先复制公共headers
+	for k, v := range common {
+		if _, exists := specific[k]; !exists {
+			specific[k] = v
+		}
+	}
+	return specific
 }
 
 // validate 验证配置

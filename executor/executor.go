@@ -12,14 +12,14 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
-	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/protocol"
 	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-stress/storage"
@@ -45,15 +45,23 @@ type Executor struct {
 	scheduler      *Scheduler
 	pool           *ClientPool
 	realtimeServer *statistics.RealtimeServer
+	logger         logger.ILogger
 	// 分布式相关
 	statsReporter StatsReporter // 用于分布式模式下的统计上报
 	isDistributed bool          // 是否为分布式模式
 }
 
 // NewExecutor 根据存储模式创建执行器（使用存储工厂）
-func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string) (*Executor, error) {
+func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string, log logger.ILogger) (*Executor, error) {
+	// 先创建 Executor 实例
+	e := &Executor{
+		config:        cfg,
+		logger:        log,
+		isDistributed: false,
+	}
+
 	// 使用存储工厂创建存储
-	factory := storage.NewStorageFactory(logger.Default)
+	factory := storage.NewStorageFactory(e.logger)
 
 	storageConfig := &storage.StorageConfig{
 		Type:   storageMode,
@@ -63,105 +71,87 @@ func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string
 
 	strg, err := factory.CreateStorage(storageConfig)
 	if err != nil {
-		logger.Default.Errorf("❌ 创建存储失败: %v，降级为内存模式", err)
-		strg = storage.NewMemoryStorage("local", logger.Default)
+		e.logger.Errorf("❌ 创建存储失败: %v，降级为内存模式", err)
+		strg = storage.NewMemoryStorage("local", e.logger)
 	}
 
 	// 创建 Collector
-	collector := statistics.NewCollectorWithStorageInterface(strg)
-
-	return newExecutor(cfg, collector)
-}
-
-// newExecutor 内部构造函数（通用逻辑）
-func newExecutor(cfg *config.Config, collector *statistics.Collector) (*Executor, error) {
+	e.collector = statistics.NewCollector(strg, e.logger)
 
 	// 设置运行模式
-	collector.SetRunMode(cfg.RunMode)
+	e.collector.SetRunMode(e.config.RunMode)
 
 	// 设置配置信息（用于报告显示）
-	collector.SetConfig(
-		string(cfg.Protocol),
-		cfg.Concurrency,
-		cfg.Requests,
+	e.collector.SetConfig(
+		string(e.config.Protocol),
+		e.config.Concurrency,
+		e.config.Requests,
 	)
 
 	// 1. 创建客户端工厂
-	clientFactory := createClientFactory(cfg)
+	clientFactory := e.createClientFactory()
 
 	// 2. 创建连接池
-	pool := NewClientPool(clientFactory, int(cfg.Concurrency))
+	e.pool = NewClientPool(clientFactory, int(e.config.Concurrency))
 
 	// 3. 构建中间件链
-	handler, err := buildMiddlewareChain(cfg, clientFactory)
+	handler, err := e.buildMiddlewareChain(clientFactory)
 	if err != nil {
 		return nil, fmt.Errorf("构建中间件链失败: %w", err)
 	}
 
-	// 4. 创建API选择器或请求构建器
-	var reqBuilder *RequestBuilder
-	var apiSelector APISelector
+	// 4. 创建API选择器（统一处理：CreateAPISelector 内部会判断单/多API）
+	apiSelector := CreateAPISelector(e.config)
 
-	if len(cfg.APIs) > 0 {
-		// 多API模式：创建API选择器
-		apiSelector = CreateAPISelector(cfg)
-		logger.Default.Info("📋 多API模式: 共%d个API配置", len(cfg.APIs))
-	} else {
-		// 单API模式：创建请求构建器（向后兼容）
-		reqBuilder = NewRequestBuilder(cfg.URL, cfg.Method, cfg.Headers, cfg.Body)
-		logger.Default.Info("📋 单API模式")
+	apiCount := len(e.config.APIs)
+	if apiCount == 0 {
+		apiCount = 1 // 单API模式
 	}
+	e.logger.Info("📋 API配置: %d个", apiCount)
 
 	// 5. 创建调度器
 	var rampUp time.Duration
-	if cfg.Advanced != nil {
-		rampUp = cfg.Advanced.RampUp
+	if e.config.Advanced != nil {
+		rampUp = e.config.Advanced.RampUp
 	}
 
 	// 直接从 config 取变量解析器
-	scheduler := NewScheduler(SchedulerConfig{
-		WorkerCount:      cfg.Concurrency,
-		RequestPerWorker: cfg.Requests,
+	e.scheduler = NewScheduler(SchedulerConfig{
+		WorkerCount:      e.config.Concurrency,
+		RequestPerWorker: e.config.Requests,
 		RampUpDuration:   rampUp,
-		ClientPool:       pool,
+		ClientPool:       e.pool,
 		Handler:          handler,
-		Collector:        collector,
-		ReqBuilder:       reqBuilder,
+		Collector:        e.collector,
 		APISelector:      apiSelector,
-		VarResolver:      cfg.VarResolver,
+		VarResolver:      e.config.VarResolver,
 		Controller:       nil, // 稍后设置
+		Logger:           e.logger,
 	})
 
-	exec := &Executor{
-		config:        cfg,
-		collector:     collector,
-		scheduler:     scheduler,
-		pool:          pool,
-		isDistributed: false, // 默认非分布式模式
-	}
-	return exec, nil
+	return e, nil
 }
 
 // createClientFactory 创建客户端工厂
-func createClientFactory(cfg *config.Config) ClientFactory {
+func (e *Executor) createClientFactory() ClientFactory {
 	return func() (Client, error) {
-		logger.Default.Infof("创建客户端: protocol=%s (type=%T)", cfg.Protocol, cfg.Protocol)
-		switch cfg.Protocol {
+		e.logger.Infof("创建客户端: protocol=%s (type=%T)", e.config.Protocol, e.config.Protocol)
+		switch e.config.Protocol {
 		case ProtocolHTTP:
-			return protocol.NewHTTPClient(cfg)
+			return protocol.NewHTTPClient(e.config)
 		case ProtocolGRPC:
-			return protocol.NewGRPCClient(cfg)
+			return protocol.NewGRPCClient(e.config)
 		case ProtocolWebSocket:
-			return protocol.NewWebSocketClient(cfg)
+			return protocol.NewWebSocketClient(e.config)
 		default:
-			return nil, fmt.Errorf("不支持的协议: %s (type=%T, raw=%q)", cfg.Protocol, cfg.Protocol, string(cfg.Protocol))
+			return nil, fmt.Errorf("不支持的协议: %s (type=%T, raw=%q)", e.config.Protocol, e.config.Protocol, string(e.config.Protocol))
 		}
 	}
 }
 
 // buildMiddlewareChain 构建中间件链
 // 执行顺序：熔断器 -> 重试器 -> 验证器 -> 客户端
-func buildMiddlewareChain(cfg *config.Config, factory ClientFactory) (RequestHandler, error) {
+func (e *Executor) buildMiddlewareChain(factory ClientFactory) (RequestHandler, error) {
 	// 创建临时客户端用于中间件
 	client, err := factory()
 	if err != nil {
@@ -171,24 +161,24 @@ func buildMiddlewareChain(cfg *config.Config, factory ClientFactory) (RequestHan
 	chain := NewMiddlewareChain()
 
 	// 1. 熔断器中间件（最外层）
-	if cfg.Advanced != nil && cfg.Advanced.EnableBreaker {
+	if e.config.Advanced != nil && e.config.Advanced.EnableBreaker {
 		circuit := breaker.New("stress-test", breaker.Config{
-			MaxFailures:       cfg.Advanced.MaxFailures,
-			ResetTimeout:      cfg.Advanced.ResetTimeout,
+			MaxFailures:       e.config.Advanced.MaxFailures,
+			ResetTimeout:      e.config.Advanced.ResetTimeout,
 			HalfOpenSuccesses: 2,
 		})
 		chain.Use(BreakerMiddleware(circuit))
 	}
 
 	// 2. 重试中间件
-	if cfg.Advanced != nil && cfg.Advanced.EnableRetry {
+	if e.config.Advanced != nil && e.config.Advanced.EnableRetry {
 		retrier := retry.NewRunner[error]()
 		chain.Use(RetryMiddleware(retrier))
 	}
 
 	// 3. 验证中间件
-	if cfg.Verify != nil && cfg.Verify.Type != "" {
-		verifier, err := verify.Get(VerifyType(cfg.Verify.Type), cfg.Verify)
+	if e.config.Verify != nil && e.config.Verify.Type != "" {
+		verifier, err := verify.Get(VerifyType(e.config.Verify.Type), e.config.Verify)
 		if err != nil {
 			return nil, fmt.Errorf("获取验证器失败: %w", err)
 		}
@@ -211,18 +201,18 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 	if e.config.Advanced != nil && e.config.Advanced.RealtimePort > 0 {
 		port = e.config.Advanced.RealtimePort
 	}
-	e.realtimeServer = statistics.NewRealtimeServer(e.collector, port)
+	e.realtimeServer = statistics.NewRealtimeServer(e.collector, port, e.logger)
 	if err := e.realtimeServer.Start(); err != nil {
-		logger.Default.Warnf("⚠️  启动实时报告服务器失败: %v", err)
-		// 启动失败时，清空 realtimeServer 引用，避免后续误操作
+		e.logger.Warnf("⚠️  启动实时报告服务器失败: %v", err)
+		// 启动失败时，清空realtimeServer 引用，避免后续误操作
 		e.realtimeServer = nil
 	} else {
 		// 将RealtimeServer设置为控制器
 		e.scheduler.controller = e.realtimeServer
 		// 自动打开浏览器
 		realtimeURL := fmt.Sprintf("http://localhost:%d", port)
-		logger.Default.Info("🌐 实时监控地址: %s", realtimeURL)
-		go openBrowser(realtimeURL)
+		e.logger.Info("🌐 实时监控地址: %s", realtimeURL)
+		go e.openBrowser(realtimeURL)
 	}
 
 	startTime := time.Now()
@@ -240,15 +230,16 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 	// 清理资源
 	e.pool.Close()
 
-	// 生成报告（即使出错也要生成）
-	report := e.collector.GenerateReport(totalDuration)
+	// 生成报告（即使出错也要生成）- 使用 ReportBuilder
+	builder := statistics.NewReportBuilder(e.collector)
+	report := builder.BuildSummary(totalDuration)
 
 	// 检查是否因为context取消而中断
 	if err != nil {
 		// 如果是用户主动取消，不关闭实时服务器，返回当前报告
-		if strings.Contains(err.Error(), "context canceled") {
-			logger.Default.Warn("\n⚠️  压测已被用户中断")
-			logger.Default.Info("📊 正在保存当前统计数据...")
+		if errors.Is(err, context.Canceled) {
+			e.logger.Warn("\n⚠️  压测已被用户中断")
+			e.logger.Info("📊 正在保存当前统计数据...")
 			return report, fmt.Errorf("执行压测失败: %w", err)
 		}
 		// 其他错误，关闭服务器
@@ -258,22 +249,22 @@ func (e *Executor) Run(ctx context.Context) (*statistics.Report, error) {
 		return nil, fmt.Errorf("执行压测失败: %w", err)
 	}
 
-	logger.Default.Info("\n✅ 压测完成!")
-	logger.Default.Info("📊 实时报告服务器继续运行，按 Ctrl+C 可停止并退出")
+	e.logger.Info("\n✅ 压测完成!")
+	e.logger.Info("📊 实时报告服务器继续运行，按 Ctrl+C 可停止并退出")
 	return report, nil
 }
 
 // printStartInfo 打印启动信息
 func (e *Executor) printStartInfo() {
-	logger.Default.Info("\n🚀 开始压测...")
-	logger.Default.Info("📊 协议: %s", e.config.Protocol)
-	logger.Default.Info("🔢 并发数: %d", e.config.Concurrency)
-	logger.Default.Info("📈 每并发请求数: %d", e.config.Requests)
-	logger.Default.Info("⏱️  超时时间: %v", e.config.Timeout)
+	e.logger.Info("\n🚀 开始压测...")
+	e.logger.Info("📊 协议: %s", e.config.Protocol)
+	e.logger.Info("🔢 并发数: %d", e.config.Concurrency)
+	e.logger.Info("📈 每并发请求数: %d", e.config.Requests)
+	e.logger.Info("⏱️  超时时间: %v", e.config.Timeout)
 	if e.config.Advanced != nil && e.config.Advanced.RampUp > 0 {
-		logger.Default.Info("⏲️  渐进启动: %v", e.config.Advanced.RampUp)
+		e.logger.Info("⏲️  渐进启动: %v", e.config.Advanced.RampUp)
 	}
-	logger.Default.Info("")
+	e.logger.Info("")
 }
 
 // GetCollector 获取统计收集器
@@ -313,7 +304,7 @@ func (e *Executor) IsDistributed() bool {
 }
 
 // openBrowser 在默认浏览器中打开URL
-func openBrowser(url string) {
+func (e *Executor) openBrowser(url string) {
 	var err error
 	switch runtime.GOOS {
 	case "linux":
@@ -326,6 +317,6 @@ func openBrowser(url string) {
 		err = fmt.Errorf("不支持的操作系统: %s", runtime.GOOS)
 	}
 	if err != nil {
-		logger.Default.Debugf("自动打开浏览器失败: %v", err)
+		e.logger.Debugf("自动打开浏览器失败: %v", err)
 	}
 }
