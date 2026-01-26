@@ -374,8 +374,11 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 		return fmt.Errorf("failed to parse task config: %w", err)
 	}
 
-	// 设置 worker 数量
-	cfg.Concurrency = uint64(taskConfig.WorkerCount)
+	// 🔥 重新创建变量解析器（分布式模式下序列化后需要重建）
+	cfg.VarResolver = config.NewVariableResolver()
+
+	// 🔥 将配置中的静态变量添加到解析器中
+	cfg.VarResolver.SetVariables(cfg.Variables)
 
 	// 设置实时报告端口（使用 Slave 配置的端口）
 	if cfg.Advanced == nil {

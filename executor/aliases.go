@@ -48,10 +48,10 @@ const (
 	ProtocolGRPC      = types.ProtocolGRPC
 	ProtocolWebSocket = types.ProtocolWebSocket
 
-	ExtractorTypeJSONPath = types.ExtractorTypeJSONPath
-	ExtractorTypeRegex    = types.ExtractorTypeRegex
-	ExtractorTypeHeader   = types.ExtractorTypeHeader
-
+	ExtractorTypeJSONPath   = types.ExtractorTypeJSONPath
+	ExtractorTypeRegex      = types.ExtractorTypeRegex
+	ExtractorTypeHeader     = types.ExtractorTypeHeader
+	ExtractorTypeExpression = types.ExtractorTypeExpression
 	// 存储模式
 	StorageModeMemory = types.StorageModeMemory
 	StorageModeSQLite = types.StorageModeSQLite

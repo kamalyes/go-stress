@@ -80,6 +80,7 @@ verify:
 ```
 
 支持的验证类型：
+
 - `status_code` - HTTP 状态码
 - `jsonpath` - JSON 路径
 - `contains` - 包含字符串
@@ -87,6 +88,7 @@ verify:
 - `json_valid` - JSON 格式验证
 
 操作符：
+
 - `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `regex`
 
 ## 多 API 配置
@@ -163,34 +165,231 @@ apis:
 
 ## 数据提取器
 
-### JSONPath 提取
+支持从HTTP请求和响应中提取数据、应用转换，并存储为变量供后续使用。
+
+### 基础提取
+
+#### 从响应提取（默认）
 
 ```yaml
 extractors:
-  - name: user_id
-    type: jsonpath
-    jsonpath: "$.data.id"
-    default: "0"
+  - name: token
+    source: response  # response(默认) | request
+    type: JSONPATH    # JSONPATH(默认) | REGEX | HEADER | EXPRESSION
+    jsonpath: $.data.token
+    default: ""
 ```
 
-### 正则表达式提取
+#### 从请求提取
 
 ```yaml
 extractors:
   - name: session_id
-    type: regex
-    regex: 'session=([a-f0-9]+)'
-    default: ""
+    source: request
+    type: JSONPATH
+    jsonpath: $.session_id
 ```
 
-### 响应头提取
+### 提取器类型
+
+#### JSONPath 提取
+
+```yaml
+extractors:
+  - name: user_id
+    type: JSONPATH
+    jsonpath: "$.data.id"
+    default: "0"
+  
+  # 从请求提取
+  - name: request_session
+    source: request
+    type: JSONPATH
+    jsonpath: "$.session_id"
+```
+
+#### 正则表达式提取
+
+```yaml
+extractors:
+  - name: session_id
+    type: REGEX
+    regex: 'session=([a-f0-9]+)'
+    source: response  # 可从request或response提取
+```
+
+#### 响应头提取
 
 ```yaml
 extractors:
   - name: csrf_token
-    type: header
+    type: HEADER
     header: X-CSRF-Token
-    default: ""
+    source: response
+  
+  # 从请求头提取
+  - name: auth_token
+    source: request
+    type: HEADER
+    header: Authorization
+```
+
+#### 表达式提取（组合变量）
+
+```yaml
+extractors:
+  - name: full_name
+    type: EXPRESSION
+    expression: "{{.first_name}} {{.last_name}}"
+```
+
+### 数据转换
+
+提取后可应用转换管道处理数据：
+
+#### 字符串转换
+
+```yaml
+extractors:
+  # 单个转换
+  - name: username
+    jsonpath: $.username
+    transforms:
+      - function: trim      # 去除空格
+  
+  # 链式转换
+  - name: email
+    jsonpath: $.email
+    transforms:
+      - function: trim
+      - function: lower     # 转小写
+  
+  # 转大写
+  - name: status
+    jsonpath: $.status
+    transforms:
+      - function: upper
+```
+
+#### 加密和编码
+
+```yaml
+extractors:
+  # MD5加密
+  - name: password_hash
+    jsonpath: $.password
+    transforms:
+      - function: md5
+  
+  # SHA256
+  - name: secure_hash
+    jsonpath: $.data
+    transforms:
+      - function: sha256
+  
+  # Base64编码
+  - name: encoded_data
+    jsonpath: $.raw_data
+    transforms:
+      - function: base64
+```
+
+#### 模板转换
+
+```yaml
+extractors:
+  # 简单模板
+  - name: formatted_id
+    jsonpath: $.id
+    transforms:
+      - template: "USER_{{.value}}"
+  
+  # 带参数的模板
+  - name: prefixed_name
+    jsonpath: $.name
+    transforms:
+      - template: "{{.arg0}}_{{.value}}_{{.arg1}}"
+        args: ["PREFIX", "SUFFIX"]
+```
+
+#### 复杂转换链
+
+```yaml
+extractors:
+  - name: processed_email
+    jsonpath: $.user.email
+    transforms:
+      - function: trim       # 1. 去空格
+      - function: lower      # 2. 转小写
+      - function: md5        # 3. MD5加密
+```
+
+### 支持的转换函数
+
+#### 字符串处理
+
+- `upper` - 转大写
+- `lower` - 转小写
+- `trim` - 去除空格
+- `title` - 首字母大写
+- `trimPrefix` - 去除前缀
+- `trimSuffix` - 去除后缀
+- `replace` - 替换字符串
+- `reverse` - 反转字符串
+
+#### 加密哈希
+
+- `md5` - MD5哈希
+- `sha1` - SHA1哈希
+- `sha256` - SHA256哈希
+
+#### 编码解码
+
+- `base64` - Base64编码
+- `base64Decode` - Base64解码
+- `urlEncode` - URL编码
+- `urlDecode` - URL解码
+- `hexEncode` - 十六进制编码
+- `hexDecode` - 十六进制解码
+
+### 完整示例
+
+```yaml
+apis:
+  - name: login
+    path: /api/login
+    method: POST
+    body: |
+      {
+        "username": "{{.username}}",
+        "password": "{{.password}}"
+      }
+    
+    extractors:
+      # 提取并转换用户名
+      - name: normalized_username
+        source: request
+        jsonpath: $.username
+        transforms:
+          - function: trim
+          - function: lower
+      
+      # 提取token
+      - name: access_token
+        source: response
+        jsonpath: $.data.token
+      
+      # 提取并加密session
+      - name: session_hash
+        source: response
+        jsonpath: $.data.session_id
+        transforms:
+          - function: md5
+      
+      # 组合多个字段
+      - name: user_info
+        type: EXPRESSION
+        expression: "{{.user_id}}_{{.username}}"
 ```
 
 ## 完整示例

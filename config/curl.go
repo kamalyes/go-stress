@@ -109,11 +109,8 @@ func ParseCurlCommand(curlCmd string) (*Config, error) {
 		return nil, err
 	}
 
-	// 解析变量
-	varResolver := NewVariableResolver()
-	if err := resolveConfigVariables(varResolver, config); err != nil {
-		return nil, fmt.Errorf("解析变量失败: %w", err)
-	}
+	// 🔥 创建变量解析器但不提前解析，让变量在每次请求时动态生成
+	config.VarResolver = NewVariableResolver()
 
 	return config, nil
 }

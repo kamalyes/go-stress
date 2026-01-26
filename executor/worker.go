@@ -2,7 +2,7 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2025-12-30 12:00:00
+ * @LastEditTime: 2026-01-26 20:10:56
  * @FilePath: \go-stress\executor\worker.go
  * @Description: Worker实现
  *
@@ -81,6 +81,7 @@ func NewWorker(cfg WorkerConfig, varResolver *config.VariableResolver) *Worker {
 	if ctrl == nil {
 		ctrl = &NoOpController{}
 	}
+
 	return &Worker{
 		id:          cfg.ID,
 		client:      cfg.Client,
@@ -274,7 +275,7 @@ func (w *Worker) executeRequest(ctx context.Context) {
 	// 先提取变量（无论验证是否通过都提取）
 	var extractedVars map[string]string
 	if apiCfg != nil && len(apiCfg.Extractors) > 0 && resp != nil {
-		extractedVars = w.extractAndStoreVarsLocal(apiCfg, resp)
+		extractedVars = w.extractAndStoreVarsLocal(apiCfg, req, resp)
 	}
 
 	// 标记验证是否成功
@@ -414,7 +415,7 @@ func (w *Worker) executeRequestByName(ctx context.Context, apiName string, resol
 	// 先提取变量（无论验证是否通过都提取）
 	var extractedVars map[string]string
 	if len(apiCfg.Extractors) > 0 && resp != nil {
-		extractedVars = w.extractAndStoreVarsLocal(apiCfg, resp)
+		extractedVars = w.extractAndStoreVarsLocal(apiCfg, req, resp)
 	}
 
 	// 标记验证是否成功
@@ -631,7 +632,7 @@ func replaceVars(text string, vars map[string]string) string {
 }
 
 // extractAndStoreVarsLocal 提取响应数据并存储到本地上下文，并返回提取的原始变量
-func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, resp *Response) map[string]string {
+func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, req *Request, resp *Response) map[string]string {
 	// 构建默认值映射
 	defaultValues := make(map[string]string)
 	for _, extCfg := range apiCfg.Extractors {
@@ -647,8 +648,15 @@ func (w *Worker) extractAndStoreVarsLocal(apiCfg *APIRequestConfig, resp *Respon
 		return nil
 	}
 
+	// 构造提取器上下文（传递请求和响应）
+	extractCtx := &ExtractorContext{
+		Request:   req,
+		Response:  resp,
+		Variables: w.depContext.extractedVars,
+	}
+
 	// 提取所有变量
-	extractedVars := manager.ExtractAll(resp, defaultValues)
+	extractedVars := manager.ExtractAll(extractCtx, defaultValues)
 
 	// 存储到本地上下文
 	if len(extractedVars) > 0 {
@@ -673,7 +681,13 @@ func (w *Worker) executeVerifications(apiCfg *APIRequestConfig, resp *Response) 
 		if verifyConfig.Expect != nil {
 			// 如果是字符串类型，才进行变量替换
 			if expectStr, ok := verifyConfig.Expect.(string); ok {
-				// 替换变量占位符
+				// 先用 varResolver 解析配置变量（如 {{.session_id}}）
+				if w.varResolver != nil {
+					if resolved, err := w.varResolver.Resolve(expectStr); err == nil {
+						expectStr = resolved
+					}
+				}
+				// 再替换依赖变量占位符（如 {{.send_message.message_id}}）
 				resolvedExpect := replaceVars(expectStr, w.depContext.extractedVars)
 				verifyConfig.Expect = resolvedExpect
 			}
@@ -682,6 +696,13 @@ func (w *Worker) executeVerifications(apiCfg *APIRequestConfig, resp *Response) 
 
 		// 解析 JSONPath 中的变量
 		if verifyConfig.JSONPath != "" {
+			// 先用 varResolver 解析
+			if w.varResolver != nil {
+				if resolved, err := w.varResolver.Resolve(verifyConfig.JSONPath); err == nil {
+					verifyConfig.JSONPath = resolved
+				}
+			}
+			// 再替换依赖变量
 			verifyConfig.JSONPath = replaceVars(verifyConfig.JSONPath, w.depContext.extractedVars)
 		}
 

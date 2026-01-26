@@ -67,6 +67,9 @@ func NewVariableResolver() *VariableResolver {
 		"unix": func() int64 {
 			return time.Now().Unix()
 		},
+		"unixTime": func() int64 { // unix 的别名
+			return time.Now().Unix()
+		},
 		"unixNano": func() int64 {
 			return time.Now().UnixNano()
 		},
@@ -101,6 +104,9 @@ func NewVariableResolver() *VariableResolver {
 			return random.RandString(length, random.NUMBER)
 		},
 		"randomUUID": func() string {
+			return random.UUID()
+		},
+		"uuid": func() string { // randomUUID 的别名
 			return random.UUID()
 		},
 		"randomBool": func() bool {
@@ -385,17 +391,24 @@ func (v *VariableResolver) SetVariable(key string, value any) {
 	v.variables[key] = value
 }
 
-// Resolve 解析变量
-func (v *VariableResolver) Resolve(input string) (string, error) {
-	// 快速检查是否包含模板语法
-	if !stringx.Contains(input, "{{") {
-		return input, nil
-	}
+// VariableCount 返回当前变量数量
+func (v *VariableResolver) VariableCount() int {
+	return len(v.variables)
+}
 
-	// 检查是否包含依赖变量 {{.apiName.varName}}
-	// 依赖变量应该在运行时由worker替换,不在配置加载时处理
-	if stringx.Contains(input, "{{.") {
-		// 保留依赖变量，不进行解析
+const (
+	templateOpen  = "{{"
+	templateClose = "}}"
+)
+
+// Resolve 变量解析方法
+// 支持特性：
+// 1. {{.varname}} 直接访问用户定义的变量
+// 2. {{randomString 8}} 调用模板函数
+// 3. {{.Env.PATH}}, {{.Time.Unix}} 访问特殊命名空间
+func (v *VariableResolver) Resolve(input string) (string, error) {
+	// 快速路径：如果不包含模板语法，直接返回（性能优化）
+	if len(input) == 0 || !contains(input, templateOpen) || !contains(input, templateClose) {
 		return input, nil
 	}
 
@@ -405,11 +418,31 @@ func (v *VariableResolver) Resolve(input string) (string, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, v.buildContext()); err != nil {
+	// 核心改进：构建完整上下文，将用户变量展开到根级别
+	ctx := v.buildContext()
+	// 将所有用户变量展开到根级别，这样 {{.receiver_id}} 可以直接访问
+	for k, val := range v.variables {
+		// 避免覆盖系统保留字段
+		if k != "Env" && k != "Variables" && k != "Seq" && k != "Time" {
+			ctx[k] = val
+		}
+	}
+
+	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return "", fmt.Errorf("执行模板失败: %w", err)
 	}
 
 	return buf.String(), nil
+}
+
+// contains 快速字符串包含检查（比 strings.Contains 更快）
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // buildContext 构建模板上下文

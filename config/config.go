@@ -76,12 +76,30 @@ type APIConfig struct {
 
 // ExtractorConfig 数据提取器配置
 type ExtractorConfig struct {
-	Name     string        `json:"name" yaml:"name"`                             // 提取变量的名称
-	Type     ExtractorType `json:"type,omitempty" yaml:"type,omitempty"`         // 提取类型：jsonpath(默认), regex, header
-	JSONPath string        `json:"jsonpath,omitempty" yaml:"jsonpath,omitempty"` // JSONPath表达式（如：$.data.token）
-	Regex    string        `json:"regex,omitempty" yaml:"regex,omitempty"`       // 正则表达式
-	Header   string        `json:"header,omitempty" yaml:"header,omitempty"`     // 响应头名称
-	Default  string        `json:"default,omitempty" yaml:"default,omitempty"`   // 默认值（提取失败时使用）
+	Name       string            `json:"name" yaml:"name"`                                 // 提取变量的名称
+	Source     ExtractorSource   `json:"source,omitempty" yaml:"source,omitempty"`         // 提取源：response(默认) | request
+	Type       ExtractorType     `json:"type,omitempty" yaml:"type,omitempty"`             // 提取类型：jsonpath(默认), regex, header, expression
+	JSONPath   string            `json:"jsonpath,omitempty" yaml:"jsonpath,omitempty"`     // JSONPath表达式（如：$.data.token）
+	Regex      string            `json:"regex,omitempty" yaml:"regex,omitempty"`           // 正则表达式
+	Header     string            `json:"header,omitempty" yaml:"header,omitempty"`         // 响应头名称
+	Expression string            `json:"expression,omitempty" yaml:"expression,omitempty"` // 表达式（如：{{.first_name}} {{.last_name}}）
+	Transforms []TransformConfig `json:"transforms,omitempty" yaml:"transforms,omitempty"` // 数据转换管道
+	Default    string            `json:"default,omitempty" yaml:"default,omitempty"`       // 默认值（提取失败时使用）
+}
+
+// ExtractorSource 提取源
+type ExtractorSource string
+
+const (
+	ExtractorSourceResponse ExtractorSource = "response" // 从响应提取（默认）
+	ExtractorSourceRequest  ExtractorSource = "request"  // 从请求提取
+)
+
+// TransformConfig 数据转换配置（复用 VariableResolver 的函数系统）
+type TransformConfig struct {
+	Function string        `json:"function" yaml:"function"`                     // 函数名（如：trim, upper, md5, date "2006-01-02"）
+	Args     []interface{} `json:"args,omitempty" yaml:"args,omitempty"`         // 函数参数（可选）
+	Template string        `json:"template,omitempty" yaml:"template,omitempty"` // 模板表达式（如：{{upper .value}}，用于复杂转换）
 }
 
 // HTTPConfig HTTP协议配置

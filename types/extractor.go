@@ -14,7 +14,8 @@ package types
 type ExtractorType string
 
 const (
-	ExtractorTypeJSONPath ExtractorType = "JSONPATH" // JSONPath提取
-	ExtractorTypeRegex    ExtractorType = "REGEX"    // 正则表达式提取
-	ExtractorTypeHeader   ExtractorType = "HEADER"   // 响应头提取
+	ExtractorTypeJSONPath   ExtractorType = "JSONPATH"   // JSONPath提取
+	ExtractorTypeRegex      ExtractorType = "REGEX"      // 正则表达式提取
+	ExtractorTypeHeader     ExtractorType = "HEADER"     // 响应头提取
+	ExtractorTypeExpression ExtractorType = "EXPRESSION" // 表达式提取
 )
