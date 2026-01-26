@@ -24,6 +24,7 @@ import (
 	pb "github.com/kamalyes/go-stress/distributed/proto"
 	"github.com/kamalyes/go-stress/executor"
 	"github.com/kamalyes/go-stress/statistics"
+	"github.com/kamalyes/go-stress/storage"
 	"github.com/kamalyes/go-toolbox/pkg/netx"
 	"github.com/kamalyes/go-toolbox/pkg/osx"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
@@ -80,7 +81,7 @@ func NewSlave(config *common.SlaveConfig, log logger.ILogger) (*Slave, error) {
 	slave := &Slave{
 		config:        config,
 		info:          info,
-		collector:     statistics.NewCollectorWithStorageInterface(statistics.NewMemoryStorage(config.SlaveID, log)), // 使用内存存储
+		collector:     statistics.NewCollectorWithStorageInterface(storage.NewMemoryStorage(config.SlaveID, log)), // 使用内存存储
 		statsBuffer:   NewStatsBuffer(config.SlaveID, config.ReportBuffer, log),
 		monitor:       NewResourceMonitor(log, 5*time.Second),
 		logger:        log,

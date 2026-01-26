@@ -3,12 +3,12 @@
  * @Date: 2026-01-26 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
  * @LastEditTime: 2026-01-26 10:37:11
- * @FilePath: \go-stress\statistics\storage_factory_test.go
+ * @FilePath: \go-stress\storage\storage_factory_test.go
  * @Description: 存储工厂测试
  *
  * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
-package statistics
+package storage
 
 import (
 	"os"

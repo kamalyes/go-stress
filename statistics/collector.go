@@ -2,7 +2,7 @@
 * @Author: kamalyes 501893067@qq.com
 * @Date: 2025-12-30 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-25 22:13:52
+ * @LastEditTime: 2026-01-26 11:15:22
 * @FilePath: \go-stress\statistics\collector.go
 * @Description: 统计数据收集器
 *
@@ -41,7 +41,7 @@ type Collector struct {
 	statusCodes *syncx.Map[int, uint64]
 
 	// 统一的存储接口（支持 SQLite 和 Memory 两种实现）
-	storage DetailStorageInterface
+	storage StorageInterface
 
 	// ID 生成器（使用 Snowflake 算法生成全局唯一ID）
 	idGenerator *idgen.SnowflakeGenerator
@@ -63,7 +63,7 @@ type Collector struct {
 }
 
 // NewCollectorWithStorageInterface 使用已创建的存储接口创建收集器（工厂模式）
-func NewCollectorWithStorageInterface(storage DetailStorageInterface) *Collector {
+func NewCollectorWithStorageInterface(strg StorageInterface) *Collector {
 	return &Collector{
 		totalRequests:   syncx.NewUint64(0),
 		successRequests: syncx.NewUint64(0),
@@ -74,7 +74,7 @@ func NewCollectorWithStorageInterface(storage DetailStorageInterface) *Collector
 		durations:       make([]float64, 0, 10000),
 		errors:          syncx.NewMap[string, uint64](),
 		statusCodes:     syncx.NewMap[int, uint64](),
-		storage:         storage,
+		storage:         strg,
 		idGenerator:     idgen.NewSnowflakeGenerator(1, 1),
 		minDuration:     time.Hour,
 		closed:          syncx.NewBool(false),

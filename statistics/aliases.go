@@ -11,6 +11,7 @@
 package statistics
 
 import (
+	"github.com/kamalyes/go-stress/storage"
 	"github.com/kamalyes/go-stress/types"
 )
 
@@ -22,7 +23,14 @@ type (
 	RunMode            = types.RunMode
 
 	// 存储相关
-	StorageMode = types.StorageMode
+	StorageMode      = types.StorageMode
+	StorageInterface = storage.Interface
+	StatusFilter     = storage.StatusFilter
+)
+
+// 函数别名
+var (
+	ParseStatusFilter = storage.ParseStatusFilter
 )
 
 // 常量别名
@@ -31,4 +39,10 @@ const (
 	StorageModeMemory = types.StorageModeMemory
 	StorageModeSQLite = types.StorageModeSQLite
 	StorageModeBadger = types.StorageModeBadger
+
+	// 状态过滤器
+	StatusFilterAll     = storage.StatusFilterAll
+	StatusFilterSuccess = storage.StatusFilterSuccess
+	StatusFilterFailed  = storage.StatusFilterFailed
+	StatusFilterSkipped = storage.StatusFilterSkipped
 )

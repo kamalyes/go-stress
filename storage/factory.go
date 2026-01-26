@@ -3,12 +3,12 @@
  * @Date: 2026-01-26 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
  * @LastEditTime: 2026-01-26 10:37:54
- * @FilePath: \go-stress\statistics\storage_factory.go
+ * @FilePath: \go-stress\storage\storage_factory.go
  * @Description: 存储工厂 - 统一创建不同类型的存储适配器
  *
  * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
-package statistics
+package storage
 
 import (
 	"fmt"
@@ -37,7 +37,7 @@ func NewStorageFactory(log logger.ILogger) *StorageFactory {
 }
 
 // CreateStorage 创建存储实例
-func (f *StorageFactory) CreateStorage(config *StorageConfig) (DetailStorageInterface, error) {
+func (f *StorageFactory) CreateStorage(config *StorageConfig) (Interface, error) {
 	if config == nil {
 		return nil, fmt.Errorf("存储配置不能为空")
 	}
@@ -61,7 +61,7 @@ func (f *StorageFactory) CreateStorage(config *StorageConfig) (DetailStorageInte
 }
 
 // createMemoryStorage 创建内存存储
-func (f *StorageFactory) createMemoryStorage(config *StorageConfig) (DetailStorageInterface, error) {
+func (f *StorageFactory) createMemoryStorage(config *StorageConfig) (Interface, error) {
 	f.logger.Info("💾 创建内存存储...")
 
 	storage := NewMemoryStorage(config.NodeID, f.logger)
@@ -71,7 +71,7 @@ func (f *StorageFactory) createMemoryStorage(config *StorageConfig) (DetailStora
 }
 
 // createSQLiteStorage 创建 SQLite 存储
-func (f *StorageFactory) createSQLiteStorage(config *StorageConfig) (DetailStorageInterface, error) {
+func (f *StorageFactory) createSQLiteStorage(config *StorageConfig) (Interface, error) {
 	if config.Path == "" {
 		return nil, fmt.Errorf("SQLite 存储需要指定 path 参数")
 	}
@@ -88,7 +88,7 @@ func (f *StorageFactory) createSQLiteStorage(config *StorageConfig) (DetailStora
 }
 
 // createBadgerStorage 创建 BadgerDB 存储
-func (f *StorageFactory) createBadgerStorage(config *StorageConfig) (DetailStorageInterface, error) {
+func (f *StorageFactory) createBadgerStorage(config *StorageConfig) (Interface, error) {
 	if config.Path == "" {
 		return nil, fmt.Errorf("BadgerDB 存储需要指定 path 参数")
 	}

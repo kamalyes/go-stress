@@ -22,6 +22,7 @@ import (
 	"github.com/kamalyes/go-stress/logger"
 	"github.com/kamalyes/go-stress/protocol"
 	"github.com/kamalyes/go-stress/statistics"
+	"github.com/kamalyes/go-stress/storage"
 	"github.com/kamalyes/go-stress/verify"
 	"github.com/kamalyes/go-toolbox/pkg/breaker"
 	"github.com/kamalyes/go-toolbox/pkg/retry"
@@ -52,22 +53,22 @@ type Executor struct {
 // NewExecutor 根据存储模式创建执行器（使用存储工厂）
 func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string) (*Executor, error) {
 	// 使用存储工厂创建存储
-	factory := statistics.NewStorageFactory(logger.Default)
+	factory := storage.NewStorageFactory(logger.Default)
 
-	storageConfig := &statistics.StorageConfig{
+	storageConfig := &storage.StorageConfig{
 		Type:   storageMode,
 		Path:   storagePath,
 		NodeID: "local",
 	}
 
-	storage, err := factory.CreateStorage(storageConfig)
+	strg, err := factory.CreateStorage(storageConfig)
 	if err != nil {
 		logger.Default.Errorf("❌ 创建存储失败: %v，降级为内存模式", err)
-		storage = statistics.NewMemoryStorage("local", logger.Default)
+		strg = storage.NewMemoryStorage("local", logger.Default)
 	}
 
 	// 创建 Collector
-	collector := statistics.NewCollectorWithStorageInterface(storage)
+	collector := statistics.NewCollectorWithStorageInterface(strg)
 
 	return newExecutor(cfg, collector)
 }

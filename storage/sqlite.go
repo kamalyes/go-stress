@@ -3,12 +3,12 @@
  * @Date: 2026-01-24 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
  * @LastEditTime: 2026-01-25 22:12:09
- * @FilePath: \go-stress\statistics\sqlite.go
+ * @FilePath: \go-stress\storage\sqlite.go
  * @Description: SQLite存储层 - 持久化请求详情（支持无限存储）
  *
  * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
-package statistics
+package storage
 
 import (
 	"database/sql"
@@ -29,63 +29,7 @@ const (
 	tableRequestDetails = "request_details"
 )
 
-// StatusFilter 状态过滤器枚举
-type StatusFilter int
-
-const (
-	StatusFilterAll     StatusFilter = iota // 全部
-	StatusFilterSuccess                     // 成功
-	StatusFilterFailed                      // 失败
-	StatusFilterSkipped                     // 跳过
-)
-
-// String 返回状态过滤器的字符串表示
-func (s StatusFilter) String() string {
-	switch s {
-	case StatusFilterSuccess:
-		return "success"
-	case StatusFilterFailed:
-		return "failed"
-	case StatusFilterSkipped:
-		return "skipped"
-	default:
-		return "all"
-	}
-}
-
-// ParseStatusFilter 从字符串解析状态过滤器
-func ParseStatusFilter(s string) StatusFilter {
-	switch s {
-	case "success":
-		return StatusFilterSuccess
-	case "failed":
-		return StatusFilterFailed
-	case "skipped":
-		return StatusFilterSkipped
-	default:
-		return StatusFilterAll
-	}
-}
-
-// DetailStorageInterface 存储接口（统一 SQLite 和 Memory 实现）
-type DetailStorageInterface interface {
-	// Write 写入请求详情
-	Write(detail *RequestResult)
-
-	// Query 分页查询请求详情（支持 nodeID 和 taskID 过滤）
-	Query(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) ([]*RequestResult, error)
-
-	// Count 统计总数（支持 nodeID 和 taskID 过滤）
-	Count(statusFilter StatusFilter, nodeID, taskID string) (int, error)
-
-	// Close 关闭存储并释放资源
-	Close() error
-
-	// GetNodeID 获取节点ID（用于分布式场景）
-	GetNodeID() string
-}
-
-// DetailStorage SQLite持久化存储（实现 DetailStorageInterface）
+// DetailStorage SQLite持久化存储（实现 Interface）
 type DetailStorage struct {
 	db          *sql.DB
 	writeChan   chan *RequestResult
@@ -203,7 +147,7 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 	return storage, nil
 }
 
-// Write 异步写入请求详情（实现 DetailStorageInterface）
+// Write 异步写入请求详情（实现 Interface）
 func (s *DetailStorage) Write(detail *RequestResult) {
 	s.mu.Lock()
 	if s.closed {
@@ -482,7 +426,7 @@ func (s *DetailStorage) Close() error {
 	return s.db.Close()
 }
 
-// GetNodeID 获取节点ID（实现 DetailStorageInterface）
+// GetNodeID 获取节点ID（实现 Interface）
 func (s *DetailStorage) GetNodeID() string {
 	return s.nodeID
 }

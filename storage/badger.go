@@ -3,12 +3,12 @@
  * @Date: 2026-01-26 00:00:00
  * @LastEditors: kamalyes 501893067@qq.com
  * @LastEditTime: 2026-01-26 00:00:00
- * @FilePath: \go-stress\statistics\badger.go
+ * @FilePath: \go-stress\storage\badger.go
  * @Description: BadgerDB 存储适配器 - 高性能 LSM-Tree 存储
  *
  * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
-package statistics
+package storage
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ import (
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
-// BadgerStorage BadgerDB 存储（实现 DetailStorageInterface）
+// BadgerStorage BadgerDB 存储（实现 Interface）
 type BadgerStorage struct {
 	db        *badger.DB
 	writeChan chan *RequestResult

@@ -2,13 +2,13 @@
  * @Author: kamalyes 501893067@qq.com
  * @Date: 2026-01-24 15:30:00
  * @LastEditors: kamalyes 501893067@qq.com
- * @LastEditTime: 2026-01-25 22:12:55
- * @FilePath: \go-stress\statistics\memory.go
- * @Description: 内存存储层 - 高速无限制存储（实现 DetailStorageInterface）
+ * @LastEditTime: 2026-01-26 00:00:00
+ * @FilePath: \go-stress\storage\memory.go
+ * @Description: 内存存储层 - 高速无限制存储（实现 Interface）
  *
  * Copyright (c) 2026 by kamalyes, All Rights Reserved.
  */
-package statistics
+package storage
 
 import (
 	"github.com/kamalyes/go-logger"
@@ -55,7 +55,7 @@ func NewMemoryStorage(nodeID string, log logger.ILogger) *MemoryStorage {
 	}
 }
 
-// Write 写入详情（按状态分类存储，实现 DetailStorageInterface）
+// Write 写入详情（按状态分类存储，实现 Interface）
 func (m *MemoryStorage) Write(detail *RequestResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -186,7 +186,7 @@ func (m *MemoryStorage) Count(statusFilter StatusFilter, nodeID, taskID string) 
 	return count, nil
 }
 
-// Close 关闭存储（实现 DetailStorageInterface）
+// Close 关闭存储（实现 Interface）
 func (m *MemoryStorage) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -210,7 +210,7 @@ func (m *MemoryStorage) Close() error {
 	return nil
 }
 
-// GetNodeID 获取节点ID（实现 DetailStorageInterface）
+// GetNodeID 获取节点ID（实现 Interface）
 func (m *MemoryStorage) GetNodeID() string {
 	return m.nodeID
 }
