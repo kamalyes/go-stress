@@ -188,3 +188,18 @@ func (sc *StatsCollector) GetAggregatedStats() *common.AggregatedStats {
 
 	return merged
 }
+
+// CollectorStats 收集器统计摘要（用于 Master 状态查询）
+type CollectorStats struct {
+	Complete int // 已完成的请求数
+	Failed   int // 失败的请求数
+}
+
+// GetStats 获取收集器统计摘要
+func (sc *StatsCollector) GetStats() *CollectorStats {
+	agg := sc.GetAggregatedStats()
+	return &CollectorStats{
+		Complete: int(agg.SuccessRequests),
+		Failed:   int(agg.FailedRequests),
+	}
+}

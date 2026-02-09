@@ -29,6 +29,19 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// MasterStats Master 统计信息（导出结构体）
+// Master 只负责分发任务，不维护任务完成/失败状态
+type MasterStats struct {
+	Running      bool      `json:"running"`       // Master 是否运行中
+	SlaveCount   int       `json:"slave_count"`   // Slave 数量
+	TaskPending  int       `json:"task_pending"`  // 待执行任务数（来自 TaskQueue）
+	TaskRunning  int       `json:"task_running"`  // 运行中任务数（来自 TaskQueue）
+	TaskStopped  int       `json:"task_stopped"`  // 已停止任务数（来自 TaskQueue）
+	TaskComplete int       `json:"task_complete"` // 已完成任务数（来自 Slave 报告）
+	TaskFailed   int       `json:"task_failed"`   // 失败任务数（来自 Slave 报告）
+	Timestamp    time.Time `json:"timestamp"`     // 统计时间戳
+}
+
 // Master Master 节点主控制器
 type Master struct {
 	config       *common.MasterConfig
@@ -459,17 +472,21 @@ func (m *Master) GetCollector() *StatsCollector {
 }
 
 // GetStats 获取系统状态
-func (m *Master) GetStats() map[string]interface{} {
+// 任务队列状态（Pending/Running/Stopped）来自 TaskQueue
+// 任务完成/失败状态来自 StatsCollector（Slave 报告）
+func (m *Master) GetStats() *MasterStats {
 	queueStats := m.taskQueue.Stats()
+	collectorStats := m.collector.GetStats() // 获取收集器的统计信息
 
-	return map[string]interface{}{
-		"running":       m.running.Load(),
-		"slave_count":   m.slavePool.Count(),
-		"task_pending":  queueStats["pending"],
-		"task_running":  queueStats["running"],
-		"task_complete": queueStats["complete"],
-		"task_failed":   queueStats["failed"],
-		"task_stopped":  queueStats["stopped"],
+	return &MasterStats{
+		Running:      m.running.Load(),
+		SlaveCount:   m.slavePool.Count(),
+		TaskPending:  queueStats.Pending,
+		TaskRunning:  queueStats.Running,
+		TaskStopped:  queueStats.Stopped,
+		TaskComplete: collectorStats.Complete, // 从收集器获取完成数
+		TaskFailed:   collectorStats.Failed,   // 从收集器获取失败数
+		Timestamp:    time.Now(),
 	}
 }
 

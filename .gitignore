@@ -57,7 +57,6 @@ benchmark_results.txt
 Thumbs.db
 
 # IDE files
-.vscode/
 .idea/
 *.swp
 *.swo

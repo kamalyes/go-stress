@@ -1,0 +1,107 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Master",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-mode", "master",
+                "-grpc-port", "9090",
+                "-http-port", "8080",
+                "-workers-per-slave", "50",
+                "-min-slave-count", "2",
+                "-log-level", "debug"
+            ],
+            "env": {},
+            "showLog": true
+        },
+        {
+            "name": "Debug Slave-1",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-mode", "slave",
+                "-master", "localhost:9090",
+                "-grpc-port", "9091",
+                "-slave-id", "slave-1",
+                "-region", "zone-a",
+                "-log-level", "debug"
+            ],
+            "env": {},
+            "showLog": true
+        },
+        {
+            "name": "Debug Slave-2",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-mode", "slave",
+                "-master", "localhost:9090",
+                "-grpc-port", "9092",
+                "-slave-id", "slave-2",
+                "-region", "zone-b",
+                "-log-level", "debug"
+            ],
+            "env": {},
+            "showLog": true
+        },
+        {
+            "name": "Debug Slave-3",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-mode", "slave",
+                "-master", "localhost:9090",
+                "-grpc-port", "9093",
+                "-slave-id", "slave-3",
+                "-region", "zone-a",
+                "-log-level", "debug"
+            ],
+            "env": {},
+            "showLog": true
+        },
+        {
+            "name": "Debug Standalone",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-config", "${workspaceFolder}/testserver/websocket-test.yaml",
+                "-workers", "10",
+                "-duration", "10s"
+            ],
+            "env": {},
+            "showLog": true
+        },
+        {
+            "name": "Attach to Process",
+            "type": "go",
+            "request": "attach",
+            "mode": "local",
+            "processId": 0
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Debug Full Distributed (Master + 3 Slaves)",
+            "configurations": [
+                "Debug Master",
+                "Debug Slave-1",
+                "Debug Slave-2",
+                "Debug Slave-3"
+            ],
+            "stopAll": true,
+            "preLaunchTask": "build"
+        }
+    ]
+}
