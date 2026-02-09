@@ -22,6 +22,18 @@ on:
         description: 'UPX version (可选)'
         required: false
         default: '5.1.0'
+      create-release:
+        description: '是否创建 Release (yes/no)'
+        required: false
+        default: 'no'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+      release-tag:
+        description: 'Release 标签 (仅在创建 Release 时需要，如 v1.0.0)'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -154,7 +166,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # Tag 推送时自动创建 release，或手动触发时选择创建
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.create-release == 'yes')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -164,4 +177,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.release-tag || github.ref_name }}
+          name: Release ${{ github.event.inputs.release-tag || github.ref_name }}
+          draft: false
+          prerelease: false
           files: dist/**/go-stress-*
