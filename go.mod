@@ -3,7 +3,7 @@ module github.com/kamalyes/go-stress
 go 1.24.0
 
 require (
-	github.com/dgraph-io/badger/v4 v4.9.0
+	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/kamalyes/go-logger v0.4.6-0.20251220131326-ff4bf447209b
