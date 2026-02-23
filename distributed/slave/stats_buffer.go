@@ -24,6 +24,13 @@ import (
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
+// maxStatsBacklog 断线期间最多缓存的补报数据条数
+//
+// Master 故障/主备切换窗口内（默认 15s Lease 过期 + 接管）上报会失败，
+// 失败的批次进入 backlog，恢复连接后按 FIFO 补报；超过上限丢最旧批次
+// 并告警——压测统计可容忍少量批次缺失，但不能无限吃内存
+const maxStatsBacklog = 1024
+
 // StatsBuffer 统计数据缓冲区 - 使用 syncx 重构
 type StatsBuffer struct {
 	slaveID      string
@@ -36,17 +43,21 @@ type StatsBuffer struct {
 	streamMu     syncx.Locker // 使用 syncx.Lock
 	logger       logger.ILogger
 	taskManager  *syncx.PeriodicTaskManager // 使用 syncx.PeriodicTask
+	// backlog 断线期间待补报的统计批次（FIFO，上限 maxStatsBacklog）
+	backlog   []*pb.StatsData
+	backlogMu syncx.Locker
 }
 
 // NewStatsBuffer 创建统计缓冲区
 func NewStatsBuffer(slaveID string, maxSize int, log logger.ILogger) *StatsBuffer {
 	return &StatsBuffer{
-		slaveID:     slaveID,
-		buffer:      make([]*types.RequestResult, 0, maxSize),
-		bufferMu:    syncx.NewLock(),
-		maxSize:     maxSize,
-		streamMu:    syncx.NewLock(),
-		logger:      log,
+		slaveID:   slaveID,
+		buffer:    make([]*types.RequestResult, 0, maxSize),
+		bufferMu:  syncx.NewLock(),
+		maxSize:   maxSize,
+		streamMu:  syncx.NewLock(),
+		backlogMu: syncx.NewLock(),
+		logger:    log,
 		taskManager: syncx.NewPeriodicTaskManager(),
 	}
 }
@@ -88,28 +99,52 @@ func (sb *StatsBuffer) Start(ctx context.Context) {
 }
 
 // Flush 刷新缓冲区
+//
+// 上报失败（Master 故障/主备切换窗口）时批次进入 backlog，连接恢复后
+// 按时序补报——断线期间的统计数据不会静默丢失
 func (sb *StatsBuffer) Flush() error {
 	sb.bufferMu.Lock()
 	if len(sb.buffer) == 0 {
 		sb.bufferMu.Unlock()
-		return nil
+		// 缓冲区为空也要尝试补报积压（重连后的恢复路径）
+		return sb.flushBacklog()
 	}
 
-	// 复制并清空缓冲区
+	// 复制并清空缓冲区（taskID 同锁快照，避免与 SetTaskID 竞态）
 	toSend := make([]*types.RequestResult, len(sb.buffer))
 	copy(toSend, sb.buffer)
 	sb.buffer = sb.buffer[:0]
+	taskID := sb.taskID
 	sb.bufferMu.Unlock()
 
 	// 聚合数据
-	stats := sb.aggregate(toSend)
+	stats := sb.aggregate(toSend, taskID)
 
-	// 发送到 Master
-	if sb.masterClient != nil && sb.taskID != "" {
-		if err := sb.sendToMaster(stats); err != nil {
-			sb.logger.WarnKV("Failed to send stats to master", "error", err)
-			return err
-		}
+	// 没有 taskID 的数据无法归属任务，不上报也不进积压
+	if taskID == "" {
+		sb.logger.DebugKV("Stats flushed locally (no task)",
+			"slave_id", sb.slaveID,
+			"records", len(toSend))
+		return nil
+	}
+
+	data := sb.buildStatsData(stats)
+
+	if sb.masterClient == nil {
+		sb.enqueueBacklog(data)
+		return nil
+	}
+
+	// 发送到 Master：失败进积压，成功后补报历史积压
+	if err := sb.sendToMaster(data); err != nil {
+		sb.enqueueBacklog(data)
+		sb.logger.WarnKV("Failed to send stats to master, queued for resend",
+			"error", err,
+			"backlog", sb.backlogSize())
+		return err
+	}
+	if err := sb.flushBacklog(); err != nil {
+		return err
 	}
 
 	sb.logger.DebugKV("Stats flushed",
@@ -120,8 +155,81 @@ func (sb *StatsBuffer) Flush() error {
 	return nil
 }
 
+// backlogSize 当前积压条数
+func (sb *StatsBuffer) backlogSize() int {
+	sb.backlogMu.Lock()
+	defer sb.backlogMu.Unlock()
+	return len(sb.backlog)
+}
+
+// enqueueBacklog 将发送失败的批次放入补报队列（超限丢最旧）
+func (sb *StatsBuffer) enqueueBacklog(data *pb.StatsData) {
+	sb.backlogMu.Lock()
+	defer sb.backlogMu.Unlock()
+	if len(sb.backlog) >= maxStatsBacklog {
+		dropped := sb.backlog[0]
+		sb.backlog = sb.backlog[1:]
+		sb.logger.WarnKV("Stats backlog overflow, dropped oldest batch",
+			"dropped_timestamp", dropped.Timestamp)
+	}
+	sb.backlog = append(sb.backlog, data)
+}
+
+// flushBacklog 补报积压批次（FIFO，失败则剩余批次回到队列）
+func (sb *StatsBuffer) flushBacklog() error {
+	if sb.masterClient == nil {
+		return nil
+	}
+
+	sb.backlogMu.Lock()
+	if len(sb.backlog) == 0 {
+		sb.backlogMu.Unlock()
+		return nil
+	}
+	pending := sb.backlog
+	sb.backlog = nil
+	sb.backlogMu.Unlock()
+
+	for i, data := range pending {
+		if err := sb.sendToMaster(data); err != nil {
+			sb.backlogMu.Lock()
+			sb.backlog = append(pending[i:], sb.backlog...)
+			sb.backlogMu.Unlock()
+			return err
+		}
+	}
+
+	if len(pending) > 0 {
+		sb.logger.InfoKV("Stats backlog resent to master", "batches", len(pending))
+	}
+	return nil
+}
+
+// buildStatsData 将聚合结果转为 proto 消息
+func (sb *StatsBuffer) buildStatsData(stats *common.SlaveStats) *pb.StatsData {
+	// 转换状态码格式
+	statusCodes := make(map[string]int64)
+	for code, count := range stats.StatusCodes {
+		statusCodes[fmt.Sprintf("%d", code)] = count
+	}
+
+	return &pb.StatsData{
+		SlaveId:         sb.slaveID,
+		TaskId:          stats.TaskID,
+		Timestamp:       time.Now().Unix(),
+		TotalRequests:   stats.TotalRequests,
+		SuccessRequests: stats.SuccessRequests,
+		FailedRequests:  stats.FailedRequests,
+		AvgLatency:      stats.AvgLatency,
+		P95Latency:      stats.P95Latency,
+		P99Latency:      stats.P99Latency,
+		Qps:             stats.QPS,
+		StatusCodes:     statusCodes,
+	}
+}
+
 // sendToMaster 发送统计数据到 Master
-func (sb *StatsBuffer) sendToMaster(stats *common.SlaveStats) error {
+func (sb *StatsBuffer) sendToMaster(data *pb.StatsData) error {
 	sb.streamMu.Lock()
 	defer sb.streamMu.Unlock()
 
@@ -140,29 +248,18 @@ func (sb *StatsBuffer) sendToMaster(stats *common.SlaveStats) error {
 		sb.reportStream = stream
 	}
 
-	// 转换状态码格式
-	statusCodes := make(map[string]int64)
-	for code, count := range stats.StatusCodes {
-		statusCodes[fmt.Sprintf("%d", code)] = count
-	}
-
-	// 构建 proto 消息
-	statsData := &pb.StatsData{
-		SlaveId:         sb.slaveID,
-		TaskId:          sb.taskID,
-		Timestamp:       time.Now().Unix(),
-		TotalRequests:   stats.TotalRequests,
-		SuccessRequests: stats.SuccessRequests,
-		FailedRequests:  stats.FailedRequests,
-		AvgLatency:      stats.AvgLatency,
-		P95Latency:      stats.P95Latency,
-		P99Latency:      stats.P99Latency,
-		Qps:             stats.QPS,
-		StatusCodes:     statusCodes,
-	}
-
 	// 发送数据
-	return sb.reportStream.Send(statsData)
+	if err := sb.reportStream.Send(data); err != nil {
+		// 发送失败通常意味着流已经失效（Master 重启/主备切换），
+		// 丢弃旧流让下次尝试重新建流到（可能已切换的）新 Master
+		if sb.reportStream != nil {
+			// 关闭旧流，忽略二次错误（连接本就断了）
+			_, _ = sb.reportStream.CloseAndRecv()
+			sb.reportStream = nil
+		}
+		return err
+	}
+	return nil
 }
 
 // SetMasterClient 设置 Master 客户端
@@ -194,10 +291,10 @@ func (sb *StatsBuffer) CloseStream() error {
 }
 
 // aggregate 聚合统计数据
-func (sb *StatsBuffer) aggregate(results []*types.RequestResult) *common.SlaveStats {
+func (sb *StatsBuffer) aggregate(results []*types.RequestResult, taskID string) *common.SlaveStats {
 	stats := &common.SlaveStats{
 		SlaveID:     sb.slaveID,
-		TaskID:      sb.taskID,
+		TaskID:      taskID,
 		StatusCodes: make(map[int]int64),
 		ErrorTypes:  make(map[string]int64),
 	}

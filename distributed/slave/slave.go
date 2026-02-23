@@ -50,11 +50,23 @@ type Slave struct {
 	grpcServer    *grpc.Server
 	masterClient  pb.MasterServiceClient
 	masterConn    *grpc.ClientConn
-	logger        logger.ILogger
-	running       *syncx.Bool // 使用 syncx.Bool
+	logger logger.ILogger
+	// running Slave 生命周期标志（Start/Stop 幂等保护）
+	running *syncx.Bool // 使用 syncx.Bool
+	// cancelFunc Slave 自身生命周期的取消函数（由 Start 设置，Stop 调用）
+	cancelFunc context.CancelFunc
+	// taskMu 保护任务生命周期字段：currentTaskID / info.State / taskCancel。
+	// ExecuteTask 是 gRPC 并发入口，心跳协程也会读 currentTaskID，
+	// 原先裸读写存在 check-then-act 竞态：两个并发派发可同时通过
+	// "已在执行任务" 检查，导致状态互相覆盖
+	taskMu syncx.Locker
+	// currentTaskID 当前执行中的任务 ID（空串表示空闲）
 	currentTaskID string
-	cancelFunc    context.CancelFunc
-	heartbeatTask *syncx.PeriodicTaskManager // 使用 syncx.PeriodicTask 管理心跳
+	// taskCancel 当前任务的取消函数。
+	// ⚠️ 与 cancelFunc 严格分离：旧实现在 ExecuteTask 里复用 cancelFunc
+	// 字段，Stop 时误杀的是任务 context，Slave 生命周期 context 反而泄漏
+	taskCancel        context.CancelFunc
+	heartbeatTask     *syncx.PeriodicTaskManager // 使用 syncx.PeriodicTask 管理心跳
 	// heartbeatFails 心跳连续失败计数（Master 失联检测）
 	heartbeatFails atomic.Int32
 }
@@ -94,6 +106,7 @@ func NewSlave(config *common.SlaveConfig, log logger.ILogger) (*Slave, error) {
 		monitor:       NewResourceMonitor(log, 5*time.Second),
 		logger:        log,
 		running:       syncx.NewBool(false),
+		taskMu:        syncx.NewLock(),
 		heartbeatTask: syncx.NewPeriodicTaskManager(),
 	}
 
@@ -110,13 +123,22 @@ func (s *Slave) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	s.cancelFunc = cancel
 
+	// rollback CAS 失败时回滚 running 标志，否则一次启动失败后
+	// Slave 实例永远无法再次 Start（旧实现遗留的坑）
+	rollback := func() {
+		cancel()
+		s.running.Store(false)
+	}
+
 	// 连接到 Master
 	if err := s.connectToMaster(); err != nil {
+		rollback()
 		return fmt.Errorf("failed to connect to master: %w", err)
 	}
 
 	// 注册到 Master
 	if err := s.register(); err != nil {
+		rollback()
 		return fmt.Errorf("failed to register to master: %w", err)
 	}
 
@@ -134,6 +156,7 @@ func (s *Slave) Start(ctx context.Context) error {
 
 	// 启动 gRPC 服务器
 	if err := s.startGRPCServer(); err != nil {
+		rollback()
 		return fmt.Errorf("failed to start gRPC server: %w", err)
 	}
 
@@ -158,6 +181,14 @@ func (s *Slave) Stop() error {
 	// 停止组件
 	if s.cancelFunc != nil {
 		s.cancelFunc()
+	}
+
+	// 中止当前执行中的任务（Slave 下线不应让任务裸跑到自然结束）
+	s.taskMu.Lock()
+	taskCancel := s.taskCancel
+	s.taskMu.Unlock()
+	if taskCancel != nil {
+		taskCancel()
 	}
 
 	// 停止 gRPC 服务器
@@ -331,6 +362,13 @@ func (s *Slave) sendHeartbeat() error {
 		}
 		s.heartbeatFails.Store(0)
 		s.logger.InfoKV("Re-registered successfully", "slave_id", s.info.ID)
+		// 重连成功（主备切换完成/Master 恢复）后立即补报
+		// 断线期间积压的统计数据，不用等下一个周期
+		syncx.Go().OnError(func(err error) {
+			s.logger.WarnKV("Backlog resend after re-registration failed", "error", err)
+		}).Exec(func() {
+			_ = s.statsBuffer.Flush()
+		})
 		return nil
 	}
 
@@ -351,7 +389,9 @@ func (s *Slave) onHeartbeatFailure() {
 	if !s.config.AbortOnMasterLost || fails < masterLostAbortThreshold {
 		return
 	}
+	s.taskMu.Lock()
 	taskID := s.currentTaskID
+	s.taskMu.Unlock()
 	if taskID == "" {
 		return
 	}
@@ -388,21 +428,9 @@ func (s *Slave) startGRPCServer() error {
 
 // ExecuteTask 执行任务 - 直接调用 executor.RunTask
 func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
-	if s.currentTaskID != "" {
-		return fmt.Errorf("slave is already executing task: %s", s.currentTaskID)
-	}
-
-	s.currentTaskID = taskConfig.TaskID
-	s.info.State = common.SlaveStateRunning
-
-	// 设置 StatsBuffer 的任务 ID
-	s.statsBuffer.SetTaskID(taskConfig.TaskID)
-
-	s.logger.InfoKV("Executing task",
-		"task_id", taskConfig.TaskID,
-		"workers", taskConfig.WorkerCount)
-
-	// 解析任务配置
+	// 先解析任务配置再占用 Slave 状态：旧实现在解析失败时已经把
+	// State 置为 Running、currentTaskID 写入，却直接返回错误 ——
+	// Slave 从此卡死在 "执行中"，拒绝一切后续任务直到重启
 	var cfg config.Config
 	if err := json.Unmarshal(taskConfig.Config, &cfg); err != nil {
 		return fmt.Errorf("failed to parse task config: %w", err)
@@ -420,12 +448,48 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 	}
 	cfg.Advanced.RealtimePort = s.config.RealtimePort
 
-	// 创建可取消的 context
+	// 加锁做 check-then-act：并发派发 / StopTask / 心跳失联中止
+	// 都会触碰这些字段
+	s.taskMu.Lock()
+	if !s.running.Load() {
+		s.taskMu.Unlock()
+		return fmt.Errorf("slave is shutting down, reject task %s", taskConfig.TaskID)
+	}
+	if s.currentTaskID != "" {
+		busy := s.currentTaskID
+		s.taskMu.Unlock()
+		return fmt.Errorf("slave is already executing task: %s", busy)
+	}
+
+	s.currentTaskID = taskConfig.TaskID
+	s.info.State = common.SlaveStateRunning
+
+	// 任务独立的可取消 context，与 Slave 生命周期的 cancelFunc 分离
 	ctx, cancel := context.WithCancel(context.Background())
-	s.cancelFunc = cancel
+	s.taskCancel = cancel
+	s.taskMu.Unlock()
+
+	// 设置 StatsBuffer 的任务 ID
+	s.statsBuffer.SetTaskID(taskConfig.TaskID)
+
+	s.logger.InfoKV("Executing task",
+		"task_id", taskConfig.TaskID,
+		"workers", taskConfig.WorkerCount)
 
 	// 设置外部上报器 - 传递 Add 方法作为回调
 	s.collector.SetExternalReporter(s.statsBuffer.Add)
+
+	// finishTask 清理任务态：仅当仍在执行该任务时生效，
+	// 避免与 StopTask 竞态误清后续任务
+	finishTask := func(state common.SlaveState) {
+		s.taskMu.Lock()
+		if s.currentTaskID == taskConfig.TaskID {
+			s.currentTaskID = ""
+			s.taskCancel = nil
+			s.info.State = state
+		}
+		s.taskMu.Unlock()
+	}
 
 	// 使用 syncx.GoExecutor 在后台运行任务
 	syncx.Go().
@@ -433,15 +497,11 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 			if err != nil {
 				s.logger.ErrorKV("Task execution failed", "error", err)
 			}
-			s.info.State = common.SlaveStateError
-			s.currentTaskID = ""
-			s.cancelFunc = nil
+			finishTask(common.SlaveStateError)
 		}).
 		OnPanic(func(r interface{}) {
 			s.logger.ErrorKV("Task execution panicked", "panic", r)
-			s.info.State = common.SlaveStateError
-			s.currentTaskID = ""
-			s.cancelFunc = nil
+			finishTask(common.SlaveStateError)
 		}).
 		ExecWithContext(func(execCtx context.Context) error {
 			// 🔥 直接调用 executor.RunTask
@@ -457,14 +517,19 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 				NoWait:            true,                       // 不等待退出
 			})
 
-			// 任务完成后通知 Master
-			success := result.Error == nil
-			s.reportTaskCompletion(taskConfig.TaskID, success, result.Error)
+			// 任务结束后检查是否仍是当前任务：
+			// - 正常完成 → 上报 Master 并清理
+			// - 已被 StopTask/心跳失联中止 → 跳过上报（Master 侧已归档），
+			//   只刷数据，避免在新主上产生 "孤儿完成" 告警
+			s.taskMu.Lock()
+			stillActive := s.currentTaskID == taskConfig.TaskID
+			s.taskMu.Unlock()
 
-			// 清理并更新状态
-			s.currentTaskID = ""
-			s.info.State = common.SlaveStateIdle
-			s.cancelFunc = nil
+			success := result.Error == nil
+			if stillActive {
+				s.reportTaskCompletion(taskConfig.TaskID, success, result.Error)
+				finishTask(common.SlaveStateIdle)
+			}
 
 			// 最后刷新一次统计数据
 			if flushErr := s.statsBuffer.Flush(); flushErr != nil {
@@ -485,21 +550,33 @@ func (s *Slave) ExecuteTask(taskConfig *common.SubTask) error {
 
 // StopTask 停止任务
 func (s *Slave) StopTask(taskID string) error {
-	if s.currentTaskID != taskID {
-		return fmt.Errorf("task %s is not running", taskID)
+	s.taskMu.Lock()
+	current := s.currentTaskID
+	var taskCancel context.CancelFunc
+	if current == taskID {
+		taskCancel = s.taskCancel
+		// 先清理任务态再取消 context，避免任务协程的完成回调
+		// 与本函数竞态重复清理/误报完成
+		s.currentTaskID = ""
+		s.taskCancel = nil
+		s.info.State = common.SlaveStateIdle
+	}
+	s.taskMu.Unlock()
+
+	if current != taskID {
+		if current == "" {
+			return fmt.Errorf("no task is running")
+		}
+		return fmt.Errorf("task %s is not running (current: %s)", taskID, current)
 	}
 
 	s.logger.InfoKV("Stopping task", "task_id", taskID)
 
-	// 调用 context cancel 函数停止 Executor
-	if s.cancelFunc != nil {
-		s.cancelFunc()
-		s.cancelFunc = nil
+	// 调用任务自己的取消函数停止 Executor
+	if taskCancel != nil {
+		taskCancel()
 	}
 
-	// 清理任务状态
-	s.currentTaskID = ""
-	s.info.State = common.SlaveStateIdle
 	s.statsBuffer.SetTaskID("")
 
 	// 关闭统计流
@@ -556,7 +633,12 @@ func (s *Slave) reportTaskCompletion(taskID string, success bool, taskErr error)
 // getStatus 获取 Slave 状态
 func (s *Slave) getStatus() *common.SlaveInfo {
 	status := *s.info
+	// currentTaskID 由任务协程并发写入，心跳协程读取必须加锁
+	s.taskMu.Lock()
 	status.CurrentTaskID = s.currentTaskID
+	taskState := s.info.State
+	s.taskMu.Unlock()
+	status.State = taskState
 
 	// 获取实时的 CPU 使用情况
 	if cpuPercents, err := cpu.Percent(0, false); err == nil && len(cpuPercents) > 0 {
