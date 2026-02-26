@@ -123,11 +123,15 @@ func (tq *TaskQueue) Submit(task *common.Task) error {
 		// 创建状态机（确保在提交时就创建）
 		tq.getTaskStateMachine(task.ID)
 
-		// 循环队列：容量不足时扩容
+		// 循环队列：容量不足时扩容。
+		// ⚠️ 队列可能已回绕（pendingHead > 0），必须按 (head+i)%cap 展开，
+		// 直接 copy(newQueue, pendingQueue[:len]) 在回绕后会拷贝错元素
 		if tq.pendingLen >= tq.pendingCap {
 			newCap := tq.pendingCap * 2
 			newQueue := make([]*common.Task, newCap)
-			copy(newQueue, tq.pendingQueue[:tq.pendingLen])
+			for i := 0; i < tq.pendingLen; i++ {
+				newQueue[i] = tq.pendingQueue[(tq.pendingHead+i)%tq.pendingCap]
+			}
 			tq.pendingQueue = newQueue
 			tq.pendingCap = newCap
 			tq.pendingHead = 0
@@ -252,6 +256,23 @@ func (tq *TaskQueue) MoveToRunning(taskID string) error {
 		atomic.AddInt64(&tq.runningCount, 1)
 
 		tq.logger.InfoKV("Task started", "task_id", taskID)
+		return nil
+	})
+}
+
+// AssignSlaves 记录任务分配到的 Slave 列表
+//
+// 必须走队列锁：task 指针被派发协程写入、Cancel/查询协程读取，
+// 旧实现裸写 task.AssignedSlaves 存在数据竞争（-race 可复现）
+func (tq *TaskQueue) AssignSlaves(taskID string, slaveIDs []string) error {
+	return syncx.WithLockReturnValue(tq.mu, func() error {
+		task, ok := tq.allTasks.Load(taskID)
+		if !ok {
+			return fmt.Errorf("task %s not found", taskID)
+		}
+		ids := make([]string, len(slaveIDs))
+		copy(ids, slaveIDs)
+		task.AssignedSlaves = ids
 		return nil
 	})
 }

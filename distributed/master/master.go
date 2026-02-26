@@ -96,6 +96,9 @@ func NewMaster(config *common.MasterConfig, log logger.ILogger) (*Master, error)
 		logger:       log,
 	}
 
+	// Slave 故障回调：对受影响的运行中任务做失败闭环（详见 failover.go）
+	master.slavePool.SetOnSlaveFailure(master.handleSlaveFailure)
+
 	return master, nil
 }
 
@@ -109,6 +112,13 @@ func (m *Master) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	m.cancelFunc = cancel
 
+	// rollback 启动失败时回滚 running 标志，否则一次失败后
+	// Master 实例永远无法再次 Start
+	rollback := func() {
+		cancel()
+		m.running.Store(false)
+	}
+
 	// 启动各个组件
 	go m.slavePool.StartHealthCheck(ctx)
 	go m.collector.Start(ctx)
@@ -116,6 +126,7 @@ func (m *Master) Start(ctx context.Context) error {
 
 	// 启动 gRPC 服务器
 	if err := m.startGRPCServer(); err != nil {
+		rollback()
 		return fmt.Errorf("failed to start gRPC server: %w", err)
 	}
 
@@ -123,6 +134,7 @@ func (m *Master) Start(ctx context.Context) error {
 	if m.config.HTTPPort > 0 {
 		m.httpServer = NewHTTPServer(m, m.config.HTTPPort, m.logger)
 		if err := m.httpServer.Start(); err != nil {
+			rollback()
 			return fmt.Errorf("failed to start HTTP server: %w", err)
 		}
 	}
@@ -400,15 +412,21 @@ func (m *Master) processTaskWithSlaves(task *common.Task, slaves []*common.Slave
 		return
 	}
 
-	// 更新任务状态
-	task.AssignedSlaves = make([]string, len(slaves))
+	// 记录任务分配的 Slave 列表（走队列锁写，避免与 Cancel/查询协程
+	// 裸读 task.AssignedSlaves 产生数据竞争）
+	slaveIDs := make([]string, len(slaves))
 	for i, slave := range slaves {
-		task.AssignedSlaves[i] = slave.ID
+		slaveIDs[i] = slave.ID
+	}
+	if err := m.taskQueue.AssignSlaves(task.ID, slaveIDs); err != nil {
+		m.logger.ErrorKV("Failed to assign slaves", "task_id", task.ID, "error", err)
+		m.taskQueue.MoveToFailed(task.ID, err.Error())
+		return
 	}
 
 	m.logger.InfoKV("Task assigned slaves updated",
 		"task_id", task.ID,
-		"assigned_slaves", task.AssignedSlaves)
+		"assigned_slaves", slaveIDs)
 
 	m.taskQueue.MoveToRunning(task.ID)
 
@@ -573,30 +591,37 @@ func (m *Master) StopTask(taskID string) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	// 使用 syncx.Parallel 并发向所有分配的 Slave 发送停止指令
-	syncx.NewParallelSliceExecutor[string, bool](task.AssignedSlaves).
-		OnError(func(idx int, slaveID string, err error) {
-			m.logger.ErrorKV("Failed to stop task on slave", "slave_id", slaveID, "error", err)
-		}).
-		Execute(func(idx int, slaveID string) (bool, error) {
-			client, err := m.GetSlaveClient(slaveID)
-			if err != nil {
-				return false, err
-			}
+	// 仅运行中的任务需要通知 Slave 停止；
+	// pending 任务的 AssignedSlaves 为空，走队列状态机直接取消
+	if len(task.AssignedSlaves) > 0 {
+		// 使用 syncx.Parallel 并发向所有分配的 Slave 发送停止指令
+		syncx.NewParallelSliceExecutor[string, bool](task.AssignedSlaves).
+			OnError(func(idx int, slaveID string, err error) {
+				m.logger.ErrorKV("Failed to stop task on slave", "slave_id", slaveID, "error", err)
+			}).
+			Execute(func(idx int, slaveID string) (bool, error) {
+				client, err := m.GetSlaveClient(slaveID)
+				if err != nil {
+					return false, err
+				}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-			_, err = client.StopTask(ctx, &pb.StopRequest{
-				SlaveId: slaveID,
-				TaskId:  taskID,
-				Force:   false,
+				_, err = client.StopTask(ctx, &pb.StopRequest{
+					SlaveId: slaveID,
+					TaskId:  taskID,
+					Force:   false,
+				})
+				return err == nil, err
 			})
-			return err == nil, err
-		})
+	}
 
-	// 更新任务状态
-	m.taskQueue.Cancel(taskID)
+	// 更新任务状态；取消失败（如任务已终态）必须把错误抛给调用方，
+	// 旧实现直接吞掉，调用方以为停止成功实际任务还在跑
+	if err := m.taskQueue.Cancel(taskID); err != nil {
+		return fmt.Errorf("failed to cancel task %s: %w", taskID, err)
+	}
 
 	return nil
 }

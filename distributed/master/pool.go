@@ -26,6 +26,26 @@ type SlavePool struct {
 	selector    SlaveSelector
 	healthCheck *HealthChecker
 	logger      logger.ILogger
+	// onSlaveFailure Slave 故障回调（Master 注入，用于任务失败处理/重调度）。
+	// 触发时机：心跳超时被 MarkUnhealthy、主动 Unregister
+	onSlaveFailure func(slaveID string)
+}
+
+// SetOnSlaveFailure 注册 Slave 故障回调
+func (sp *SlavePool) SetOnSlaveFailure(fn func(slaveID string)) {
+	sp.onSlaveFailure = fn
+}
+
+// notifySlaveFailure 通知 Slave 故障（回调内部自行容错，不影响池状态更新）
+func (sp *SlavePool) notifySlaveFailure(slaveID string) {
+	if sp.onSlaveFailure == nil {
+		return
+	}
+	syncx.Go().OnError(func(err error) {
+		sp.logger.ErrorKV("Slave failure callback error", "slave_id", slaveID, "error", err)
+	}).Exec(func() {
+		sp.onSlaveFailure(slaveID)
+	})
 }
 
 // NewSlavePool 创建 Slave 池
@@ -61,6 +81,8 @@ func (sp *SlavePool) Unregister(slaveID string) error {
 	}
 
 	sp.slaves.Delete(slaveID)
+	// 主动下线同样可能带走运行中任务，触发故障回调
+	sp.notifySlaveFailure(slaveID)
 	return nil
 }
 
@@ -285,11 +307,21 @@ func (sp *SlavePool) MarkHealthy(slaveID string) error {
 
 // MarkUnhealthy 标记 Slave 为不健康
 func (sp *SlavePool) MarkUnhealthy(slaveID string) error {
+	transitioned := false
 	if !sp.slaves.Update(slaveID, func(slave *common.SlaveInfo) *common.SlaveInfo {
-		slave.State = common.SlaveStateError
+		if slave.State != common.SlaveStateError && slave.State != common.SlaveStateOffline {
+			slave.State = common.SlaveStateError
+			transitioned = true
+		}
 		return slave
 	}) {
 		return fmt.Errorf("slave %s not found", slaveID)
+	}
+
+	// 首次进入故障态时触发回调：Master 侧对受影响的运行中任务
+	// 做失败闭环/降级，避免任务永远卡在 Running
+	if transitioned {
+		sp.notifySlaveFailure(slaveID)
 	}
 	return nil
 }
