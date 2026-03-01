@@ -135,17 +135,27 @@ curl -fsSL https://raw.githubusercontent.com/kamalyes/go-stress/master/install.s
 
 **Windows** — 从 [Releases](https://github.com/kamalyes/go-stress/releases) 下载 `go-stress-windows-amd64.exe`，或已有 Go 时 `go install github.com/kamalyes/go-stress@latest`
 
-30 秒后见第一份报告：
+30 秒后见第一份报告 — 先起一个内置测试服务器（HTTP + WebSocket，无需任何外部依赖）：
+
+```bash
+# 在项目根目录
+go run ./testserver
+```
+
+另一个终端，对它压一把：
 
 ```bash
 # 最简压测：10 并发 × 每并发 100 请求
-go-stress -url https://api.example.com -c 10 -n 100
+go-stress -url http://localhost:3000/api/health -c 10 -n 100
 
 # 定速 500 QPS — 测「给定到达率下延迟如何」
-go-stress -url https://api.example.com -c 50 -n 5000 -qps 500
+go-stress -url http://localhost:3000/api/health -c 50 -n 5000 -qps 500
 
 # 压测计划写成 YAML，纳入版本管理
-go-stress -config plan.yaml -no-wait
+go-stress -config testserver/test-detail.yaml -no-wait
+
+# WebSocket
+go-stress -config testserver/websocket-quick.yaml -no-wait
 ```
 
 > 压测结束默认保留实时报告服务器供查看 — 脚本与 CI 场景记得加 `-no-wait`
@@ -264,19 +274,6 @@ go-stress/
 ├── types/                  跨包共享的类型定义
 ├── testserver/             内置测试服务器与示例配置
 └── docs/                   全部文档
-```
-
-## 🧪 本地验证
-
-```bash
-# 起一个内置测试服务器（HTTP + WebSocket）
-go run ./testserver
-
-# 另一个终端：HTTP
-go-stress -url http://localhost:3000/api/health -c 10 -n 100 -no-wait
-
-# WebSocket
-go-stress -config testserver/websocket-quick.yaml -no-wait
 ```
 
 ## 🤝 贡献

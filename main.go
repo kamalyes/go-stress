@@ -732,7 +732,7 @@ func printExamples() {
 		"",
 		"# 实时监控",
 		"运行后自动打开浏览器查看实时报告（默认端口: 8088，可通过配置文件的 realtime_port 修改）",
-		"测试完成后生成静态HTML报告: stress-report-{时间戳}.html",
+		"测试完成后生成静态HTML报告: stress-report/<时间戳>/index.html",
 	}
 	for _, example := range examples {
 		fmt.Println(example)
