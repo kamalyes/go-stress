@@ -255,6 +255,7 @@ envsubst < deploy/workerpool.yaml   | kubectl apply -f -
 | [存储适配器](docs/STORAGE_ADAPTERS.md) | memory / sqlite / badger 的取舍 |
 | [存储与报告](docs/STORAGE_REPORT.md) | 报告产物、实时监控、指标口径 |
 | [分布式模式](docs/DISTRIBUTED_MODE.md) | Master/Slave 架构、节点调度、任务重试、K8s 部署 |
+| [集群搭建](docs/CLUSTER_SETUP.md) | 本地/裸机/K8s 三种搭法、runtime 时序流程图、验收清单 |
 
 ## 📂 项目结构
 

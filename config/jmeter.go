@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -147,6 +148,92 @@ func hasJMeterFunc(s string) bool {
 	return jmxFuncPattern.MatchString(s)
 }
 
+// jmeterFuncRules JMeter 内置函数 → go-stress 动态变量函数的映射
+//
+// 只收录语义等价项：
+//   - __time() 返回毫秒级时间戳，与 {{timestamp}} 一致；/1000 得到秒级，对应 {{unix}}
+//   - 其余格式串（如 yyyy/MM/dd）没有对应物，不翻译、保留原文交由使用者处理
+var jmeterFuncRules = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`\$\{__Random\(\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*(?:,[^()]*)?\)\}`), "{{randomInt $1 $2}}"},
+	{regexp.MustCompile(`\$\{__RandomString\(\s*(\d+)\s*(?:,[^()]*)?\)\}`), "{{randomString $1}}"},
+	{regexp.MustCompile(`\$\{__UUID\(\s*\)\}`), "{{uuid}}"},
+	{regexp.MustCompile(`\$\{__counter\(\s*(?:TRUE|FALSE|true|false)?\s*(?:,[^()]*)?\)\}`), "{{seq}}"},
+	{regexp.MustCompile(`\$\{__time\(\s*/1000\s*(?:,[^()]*)?\)\}`), "{{unix}}"},
+	{regexp.MustCompile(`\$\{__time\(\s*(?:/1)?\s*(?:,[^()]*)?\)\}`), "{{timestamp}}"},
+}
+
+// translateJMeterFuncs 把 JMeter 的内置函数改写为 go-stress 的动态变量函数
+func translateJMeterFuncs(s string) string {
+	for _, r := range jmeterFuncRules {
+		s = r.re.ReplaceAllString(s, r.repl)
+	}
+	return s
+}
+
+// convertText 把 JMeter 的参数化语法整体改写为 go-stress 模板：
+// 先替换 CounterConfig/RandomVariableConfig 定义的变量引用，再翻译内置函数，
+// 最后处理普通变量。JMeter 里这类引用每次求值都取新值，与动态变量函数语义一致
+func (c *jmxConverter) convertText(s string) string {
+	if s == "" {
+		return s
+	}
+	if len(c.paramVars) > 0 {
+		s = jmxVarPattern.ReplaceAllStringFunc(s, func(m string) string {
+			name := strings.TrimSuffix(strings.TrimPrefix(m, "${"), "}")
+			if repl, ok := c.paramVars[name]; ok {
+				return repl
+			}
+			return m
+		})
+	}
+	s = translateJMeterFuncs(s)
+	return convertVars(s)
+}
+
+// registerParamVar 把 CounterConfig/RandomVariableConfig 注册为动态变量
+//
+// 之后所有 ${var} 引用都会替换为对应的模板函数，等价于 JMeter 每次求值取新值的行为
+func (c *jmxConverter) registerParamVar(n *jmxNode) {
+	switch n.tag() {
+	case "CounterConfig":
+		// JMeter 把变量名存在 CounterConfig.name；个别老脚本直接用 name
+		name := n.propString("CounterConfig.name", n.propString("name", ""))
+		if name == "" {
+			c.report.drop(JMXDropWarn, n.tag(), n.label(), "计数器没有变量名，无法映射到内置 seq")
+			return
+		}
+		if c.paramVars == nil {
+			c.paramVars = make(map[string]string)
+		}
+		c.paramVars[name] = "{{seq}}"
+		c.report.addMapped("计数器「%s」→ 内置变量函数 {{seq}}", name)
+
+	case "RandomVariableConfig":
+		name := n.propString("variableName", "")
+		minv := n.propString("minimumValue", "")
+		maxv := n.propString("maximumValue", "")
+		if name == "" || !isPlainInt(minv) || !isPlainInt(maxv) {
+			c.report.drop(JMXDropWarn, n.tag(), n.label(),
+				"随机变量的变量名或上下限不是纯数字，无法映射到内置 randomInt")
+			return
+		}
+		if c.paramVars == nil {
+			c.paramVars = make(map[string]string)
+		}
+		c.paramVars[name] = "{{randomInt " + minv + " " + maxv + "}}"
+		c.report.addMapped("随机变量「%s」→ 内置变量函数 {{randomInt %s %s}}", name, minv, maxv)
+	}
+}
+
+// isPlainInt 判断字符串能否直接作为 randomInt 的参数
+func isPlainInt(s string) bool {
+	_, err := strconv.Atoi(strings.TrimSpace(s))
+	return err == nil
+}
+
 // LoadJMeterPlan 读取 .jmx 并转换为 go-stress 配置
 //
 // 返回的报告无论成功与否都有效，调用方应当完整呈现给使用者。
@@ -204,6 +291,10 @@ type jmxConverter struct {
 	// JMeter 脚本极常把域名、端口、协议统一写在这里，采样器只填 path。
 	// 不认它的话，那些采样器会因为「没有 domain」而全部导不进来
 	httpDefaults *jmxNode
+
+	// paramVars CounterConfig/RandomVariableConfig 定义的参数化变量名 →
+	// go-stress 动态变量函数，引用处直接替换
+	paramVars map[string]string
 }
 
 // convert 从根 hashTree 转换出配置
@@ -304,7 +395,7 @@ func (c *jmxConverter) applyTestPlan(n *jmxNode, cfg *Config) {
 		cfg.Variables = make(map[string]any, len(vars))
 	}
 	for k, v := range vars {
-		cfg.Variables[k] = convertVars(v)
+		cfg.Variables[k] = c.convertText(v)
 	}
 	c.report.addMapped("用户定义变量 %d 项 → variables", len(vars))
 }
@@ -345,6 +436,8 @@ func (c *jmxConverter) walkPlanTree(tree *jmxNode, cfg *Config) int {
 			}
 		case "CSVDataSet":
 			c.applyCSVDataSet(node, cfg)
+		case "CounterConfig", "RandomVariableConfig":
+			c.registerParamVar(node)
 		case "Arguments":
 			vars := c.readArguments(node)
 			if len(vars) > 0 {
@@ -352,7 +445,7 @@ func (c *jmxConverter) walkPlanTree(tree *jmxNode, cfg *Config) int {
 					cfg.Variables = make(map[string]any, len(vars))
 				}
 				for k, v := range vars {
-					cfg.Variables[k] = convertVars(v)
+					cfg.Variables[k] = c.convertText(v)
 				}
 				c.report.addMapped("用户定义变量 %d 项 → variables", len(vars))
 			}
@@ -458,6 +551,8 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 			}
 		case "CSVDataSet":
 			c.applyCSVDataSet(n, cfg)
+		case "CounterConfig", "RandomVariableConfig":
+			c.registerParamVar(n)
 		case "ConstantThroughputTimer", "PreciseThroughputTimer":
 			c.applyThroughputTimer(n, cfg)
 		case "ConfigTestElement":
@@ -487,7 +582,8 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 
 		// 上面已统一处理过，这里不再重复报告
 		case "HeaderManager", "ConstantTimer", "UniformRandomTimer", "GaussianRandomTimer",
-			"CSVDataSet", "ConstantThroughputTimer", "PreciseThroughputTimer", "ConfigTestElement":
+			"CSVDataSet", "ConstantThroughputTimer", "PreciseThroughputTimer", "ConfigTestElement",
+			"CounterConfig", "RandomVariableConfig":
 
 		case "Arguments":
 			vars := c.readArguments(n)
@@ -496,7 +592,7 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 					cfg.Variables = make(map[string]any, len(vars))
 				}
 				for k, v := range vars {
-					cfg.Variables[k] = convertVars(v)
+					cfg.Variables[k] = c.convertText(v)
 				}
 				c.report.addMapped("用户定义变量 %d 项 → variables", len(vars))
 			}
@@ -509,6 +605,16 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 
 // buildAPI 把一个 HTTP 采样器及其子树转换为 APIConfig
 func (c *jmxConverter) buildAPI(n, tree *jmxNode, groupHeaders map[string]string, groupThink *ThinkTimeConfig) *APIConfig {
+	// 配置元件先于 URL/报文解析注册：采样器自身的 URL 就可能引用它们
+	for _, p := range pairsOf(tree) {
+		if p.Node.isEnabled() {
+			switch p.Node.tag() {
+			case "CounterConfig", "RandomVariableConfig":
+				c.registerParamVar(p.Node)
+			}
+		}
+	}
+
 	rawURL, err := c.samplerURL(n)
 	if err != nil {
 		c.report.drop(JMXDropFatal, n.tag(), n.label(), err.Error())
@@ -575,6 +681,9 @@ func (c *jmxConverter) buildAPI(n, tree *jmxNode, groupHeaders map[string]string
 				think = tt
 			}
 
+		case "CounterConfig", "RandomVariableConfig":
+			// 已在 buildAPI 开头提前注册，这里跳过即可
+
 		default:
 			c.dropUnknown(child)
 		}
@@ -615,10 +724,10 @@ func (c *jmxConverter) samplerURL(n *jmxNode) (string, error) {
 	// 默认值只填补采样器留空的字段，不做前缀拼接
 	field := func(name string) string {
 		if v := n.propString(name, ""); v != "" {
-			return convertVars(v)
+			return c.convertText(v)
 		}
 		if c.httpDefaults != nil {
-			return convertVars(c.httpDefaults.propString(name, ""))
+			return c.convertText(c.httpDefaults.propString(name, ""))
 		}
 		return ""
 	}
@@ -678,11 +787,13 @@ func (c *jmxConverter) samplerBody(n *jmxNode) (string, bool) {
 		if raw == "" {
 			return "", false
 		}
-		if hasJMeterFunc(raw) {
+		converted := c.convertText(raw)
+		if hasJMeterFunc(converted) {
 			c.report.drop(JMXDropWarn, "HTTPSamplerProxy", n.label(),
-				"请求体里含 JMeter 内置函数 ${__xxx()}，已原样保留但不会被求值")
+				"请求体里的某些 JMeter 内置函数没有等价物（如带格式串的 __time），"+
+					"已原样保留但不会被求值")
 		}
-		return convertVars(raw), true
+		return converted, true
 	}
 
 	// 表单参数：拼成 a=1&b=2
@@ -693,7 +804,7 @@ func (c *jmxConverter) samplerBody(n *jmxNode) (string, bool) {
 		if name == "" {
 			continue
 		}
-		parts = append(parts, convertVars(name)+"="+convertVars(val))
+		parts = append(parts, c.convertText(name)+"="+c.convertText(val))
 	}
 	if len(parts) == 0 {
 		return "", false
@@ -709,7 +820,7 @@ func (c *jmxConverter) readHeaders(n *jmxNode) map[string]string {
 		if name == "" {
 			continue
 		}
-		out[convertVars(name)] = convertVars(item.propString("Header.value", ""))
+		out[c.convertText(name)] = c.convertText(item.propString("Header.value", ""))
 	}
 	return out
 }
@@ -840,7 +951,7 @@ func (c *jmxConverter) readResponseAssertion(n *jmxNode) []VerifyConfig {
 	var values []string
 	for i := range items {
 		if v := strings.TrimSpace(items[i].Text); v != "" {
-			values = append(values, convertVars(v))
+			values = append(values, c.convertText(v))
 		}
 	}
 	if len(values) == 0 {
@@ -922,7 +1033,7 @@ func (c *jmxConverter) readJSONPathAssertion(n *jmxNode) *VerifyConfig {
 
 	v := VerifyConfig{
 		Type:        types.VerifyTypeJSONPath,
-		JSONPath:    convertVars(path),
+		JSONPath:    c.convertText(path),
 		Description: "由 JSONPathAssertion 转换",
 	}
 
@@ -932,7 +1043,7 @@ func (c *jmxConverter) readJSONPathAssertion(n *jmxNode) *VerifyConfig {
 		return &v
 	}
 
-	expect := convertVars(n.propString("EXPECTED_VALUE", ""))
+	expect := c.convertText(n.propString("EXPECTED_VALUE", ""))
 	if n.propBool("ISREGEX", false) {
 		v.Operator = types.OpRegex
 		v.Regex = true
@@ -998,7 +1109,7 @@ func (c *jmxConverter) readJSONExtractors(n *jmxNode) []ExtractorConfig {
 		e := ExtractorConfig{
 			Name:     names[i],
 			Type:     types.ExtractorTypeJSONPath,
-			JSONPath: convertVars(paths[i]),
+			JSONPath: c.convertText(paths[i]),
 			Source:   ExtractorSourceResponse,
 		}
 		if i < len(defaults) {
@@ -1071,24 +1182,22 @@ func (c *jmxConverter) dropUnknown(n *jmxNode) {
 
 	// 只影响校验强度或统计呈现，不改变发出的请求
 	warn := map[string]string{
-		"XPathAssertion":       "XPath 断言不受支持（go-stress 面向 JSON，无 XML 路径验证）",
-		"XPath2Assertion":      "XPath2 断言不受支持",
-		"HTMLAssertion":        "HTML 合法性断言不受支持",
-		"MD5HexAssertion":      "MD5 断言不受支持",
-		"SMIMEAssertion":       "SMIME 断言不受支持",
-		"CompareAssertion":     "比较断言不受支持",
-		"XPathExtractor":       "XPath 提取器不受支持",
-		"XPath2Extractor":      "XPath2 提取器不受支持",
-		"HtmlExtractor":        "CSS/jQuery 提取器不受支持",
-		"BoundaryExtractor":    "边界提取器不受支持，可改写成正则提取器",
-		"DebugPostProcessor":   "调试后置处理器只产出调试信息，无需转换",
-		"DebugSampler":         "调试采样器不发真实请求",
-		"UserParameters":       "用户参数（按线程轮换的变量）不受支持，可改用 CSV 数据源",
-		"RandomVariableConfig": "随机变量配置不受支持，可改用内置的动态变量函数",
-		"CounterConfig":        "计数器配置不受支持，可改用内置的 seq 变量函数",
-		"DNSCacheManager":      "DNS 缓存管理器不受支持",
-		"KeystoreConfig":       "密钥库配置不受支持",
-		"LoginConfig":          "登录配置不受支持",
+		"XPathAssertion":     "XPath 断言不受支持（go-stress 面向 JSON，无 XML 路径验证）",
+		"XPath2Assertion":    "XPath2 断言不受支持",
+		"HTMLAssertion":      "HTML 合法性断言不受支持",
+		"MD5HexAssertion":    "MD5 断言不受支持",
+		"SMIMEAssertion":     "SMIME 断言不受支持",
+		"CompareAssertion":   "比较断言不受支持",
+		"XPathExtractor":     "XPath 提取器不受支持",
+		"XPath2Extractor":    "XPath2 提取器不受支持",
+		"HtmlExtractor":      "CSS/jQuery 提取器不受支持",
+		"BoundaryExtractor":  "边界提取器不受支持，可改写成正则提取器",
+		"DebugPostProcessor": "调试后置处理器只产出调试信息，无需转换",
+		"DebugSampler":       "调试采样器不发真实请求",
+		"UserParameters":     "用户参数（按线程轮换的变量）不受支持，可改用 CSV 数据源",
+		"DNSCacheManager":    "DNS 缓存管理器不受支持",
+		"KeystoreConfig":     "密钥库配置不受支持",
+		"LoginConfig":        "登录配置不受支持",
 	}
 
 	// 纯粹的结果收集与展示，对负载没有任何影响

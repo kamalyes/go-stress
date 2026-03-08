@@ -566,6 +566,7 @@ Master 以 Deployment 双副本部署时，同一时刻只有主副本对外提�
 ## 相关文档
 
 - [快速开始](GETTING_STARTED.md) - 基础使用
+- [集群搭建](CLUSTER_SETUP.md) - 本地/裸机/K8s 搭建步骤、runtime 时序流程图、验收清单
 - [命令行参考](CLI_REFERENCE.md) - 分布式参数
 
 ---

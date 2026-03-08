@@ -80,6 +80,9 @@ func newTimeSeriesRecorder(c *Collector) *timeSeriesRecorder {
 		stopped:   make(chan struct{}),
 	}
 	r.base = c.latency.snapshotInto(nil)
+	// cur 由 snapshotInto 兜底分配，diff 没有兜底必须在这里分配，
+	// 否则首次 tick 差分时直接越界 panic
+	r.diff = make([]uint64, histBuckets)
 	r.lastTotal = c.totalRequests.Load()
 	r.lastFailed = c.failedRequests.Load()
 	r.lastNanos = c.totalDurationNanos.Load()

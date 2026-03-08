@@ -381,3 +381,120 @@ func TestJMXThroughputCalcModePerThread(t *testing.T) {
 	assert.InDelta(t, 20.0, cfg.Advanced.TargetQPS, 0.01)
 	assert.Contains(t, report.String(), "calcMode=0", "换算过程须在报告里说明")
 }
+
+func TestTranslateJMeterFuncs(t *testing.T) {
+	cases := map[string]string{
+		"":                                  "",
+		"普通文本":                              "普通文本",
+		"${__Random(1,100)}":                "{{randomInt 1 100}}",
+		"${__Random( 1 , 100 )}":            "{{randomInt 1 100}}",
+		"${__Random(-5,5,rand)}":            "{{randomInt -5 5}}",
+		"${__RandomString(8)}":              "{{randomString 8}}",
+		"${__RandomString(8,abcdef)}":       "{{randomString 8}}",
+		"${__UUID()}":                       "{{uuid}}",
+		"${__counter(FALSE)}":               "{{seq}}",
+		"${__counter(TRUE,)}":               "{{seq}}",
+		"${__counter()}":                    "{{seq}}",
+		"${__time()}":                       "{{timestamp}}",
+		"${__time(/1)}":                     "{{timestamp}}",
+		"${__time(/1000)}":                  "{{unix}}",
+		"${__time(/1000,now)}":              "{{unix}}",
+		"n=${__Random(1,9)}&id=${__UUID()}": "n={{randomInt 1 9}}&id={{uuid}}",
+		// 没有对应物的格式串不翻译，留给使用者处理
+		"${__time(yyyy/MM/dd)}": "${__time(yyyy/MM/dd)}",
+		"${__machineName()}":    "${__machineName()}",
+		// 普通变量不归它管
+		"${token}": "${token}",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, translateJMeterFuncs(in), "输入 %q", in)
+	}
+}
+
+// TestLoadJMeterPlanParamVars 参数化元件与内置函数须平滑译成动态变量函数
+//
+// JMeter 脚本里最常见的参数化写法（计数器、随机变量、内置函数）此前
+// 被整块丢弃或原样保留，导入后等于换了一个测试——现在直接译成等价语义
+func TestLoadJMeterPlanParamVars(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "param.jmx")
+	require.NoError(t, os.WriteFile(p, []byte(
+		`<?xml version="1.0"?><jmeterTestPlan version="1.2"><hashTree>`+
+			`<TestPlan testclass="TestPlan" testname="x"/><hashTree>`+
+			`<ThreadGroup testclass="ThreadGroup" testname="g">`+
+			`<stringProp name="ThreadGroup.num_threads">5</stringProp>`+
+			`<elementProp name="ThreadGroup.main_controller" elementType="LoopController">`+
+			`<stringProp name="LoopController.loops">10</stringProp>`+
+			`</elementProp></ThreadGroup><hashTree>`+
+			// 组级参数化元件：计数器与随机变量
+			`<CounterConfig testclass="CounterConfig" testname="计数器">`+
+			`<stringProp name="CounterConfig.name">seq_no</stringProp>`+
+			`<stringProp name="CounterConfig.start">1</stringProp>`+
+			`<stringProp name="CounterConfig.incr">1</stringProp>`+
+			`</CounterConfig><hashTree/>`+
+			`<RandomVariableConfig testclass="RandomVariableConfig" testname="随机数">`+
+			`<stringProp name="variableName">rnd_page</stringProp>`+
+			`<stringProp name="minimumValue">1</stringProp>`+
+			`<stringProp name="maximumValue">10</stringProp>`+
+			`</RandomVariableConfig><hashTree/>`+
+			// 采样器：path 里混用参数化变量与内置函数，body 走原始报文
+			`<HTTPSamplerProxy testclass="HTTPSamplerProxy" testname="查询">`+
+			`<stringProp name="HTTPSampler.domain">h.example.com</stringProp>`+
+			`<stringProp name="HTTPSampler.path">/list?page=${rnd_page}&amp;no=${seq_no}&amp;r=${__Random(1,100)}</stringProp>`+
+			`<stringProp name="HTTPSampler.method">POST</stringProp>`+
+			`<boolProp name="HTTPSampler.postBodyRaw">true</boolProp>`+
+			`<elementProp name="HTTPSampler.Arguments" elementType="Arguments">`+
+			`<collectionProp name="Arguments.arguments">`+
+			`<elementProp name="" elementType="HTTPArgument">`+
+			`<boolProp name="HTTPArgument.always_encode">false</boolProp>`+
+			`<stringProp name="Argument.value">{"uid":"${__UUID()}","no":"${seq_no}","t":"${__time(/1000,)}","c":${__counter(FALSE,)}}</stringProp>`+
+			`</elementProp></collectionProp></elementProp>`+
+			`</HTTPSamplerProxy><hashTree>`+
+			// 请求头里的内置函数同样要翻译
+			`<HeaderManager testclass="HeaderManager" testname="头">`+
+			`<collectionProp name="HeaderManager.headers">`+
+			`<elementProp name="" elementType="Header">`+
+			`<stringProp name="Header.name">X-Ts</stringProp>`+
+			`<stringProp name="Header.value">${__time()}</stringProp>`+
+			`</elementProp></collectionProp>`+
+			`</HeaderManager><hashTree/>`+
+			// 加一个响应断言，避免单采样器无验证时退化为单 API 写法
+			`<ResponseAssertion testclass="ResponseAssertion" testname="校验">`+
+			`<collectionProp name="Asserion.test_strings">`+
+			`<stringProp name="49586">ok</stringProp>`+
+			`</collectionProp>`+
+			`</ResponseAssertion><hashTree/>`+
+			`</hashTree></hashTree></hashTree></hashTree></jmeterTestPlan>`), 0o600))
+
+	cfg, report, err := LoadJMeterPlan(p, false)
+	require.NoError(t, err, "报告:\n%s", report)
+	require.Len(t, cfg.APIs, 1)
+	api := cfg.APIs[0]
+
+	t.Run("URL 里的变量与函数全部译出", func(t *testing.T) {
+		assert.Equal(t,
+			"http://h.example.com/list?page={{randomInt 1 10}}&no={{seq}}&r={{randomInt 1 100}}",
+			api.URL)
+	})
+
+	t.Run("原始报文里的函数译出", func(t *testing.T) {
+		assert.Equal(t,
+			`{"uid":"{{uuid}}","no":"{{seq}}","t":"{{unix}}","c":{{seq}}}`,
+			api.Body)
+	})
+
+	t.Run("请求头里的函数译出", func(t *testing.T) {
+		assert.Equal(t, "{{timestamp}}", api.Headers["X-Ts"])
+	})
+
+	t.Run("参数化元件不再报丢失", func(t *testing.T) {
+		assert.False(t, report.HasFatal())
+		for _, d := range report.Drops {
+			assert.NotEqual(t, "CounterConfig", d.Element)
+			assert.NotEqual(t, "RandomVariableConfig", d.Element)
+		}
+		assert.Contains(t, report.String(), "seq_no",
+			"计数器的映射过程应在报告里可见")
+		assert.Contains(t, report.String(), "rnd_page",
+			"随机变量的映射过程应在报告里可见")
+	})
+}

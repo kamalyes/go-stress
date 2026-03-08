@@ -129,13 +129,39 @@ JMeter 的匹配方式是位掩码（`MATCH=1 CONTAINS=2 NOT=4 EQUALS=8 SUBSTRIN
 
 `defaultValues` 映射为 `default`；`RegexExtractor.template` 非 `$1$` 或 `useHeaders` 非 false 时记 WARN 并按默认行为处理
 
-### 变量
+### 变量与参数化
 
 `${name}` 自动改写为 go-stress 的 `{{.name}}`，作用于 URL、请求头、请求体、断言期望值、JSONPath
 
 `TestPlan` 与 `Arguments` 里的用户定义变量映射为 `variables`
 
-JMeter 内置函数 `${__xxx(...)}` **不改写也不求值**，原样保留并记 WARN — 请改用 go-stress 的 [变量函数](VARIABLES.md)
+#### 内置函数 → 动态变量函数
+
+JMeter 的内置函数按语义等价**直接翻译**为 go-stress 的[动态变量函数](VARIABLES.md)：
+
+| JMeter 函数 | go-stress | 语义 |
+|:------------|:----------|:-----|
+| `${__Random(min, max)}` | `{{randomInt min max}}` | 区间内随机整数 |
+| `${__RandomString(len)}` | `{{randomString len}}` | 定长随机字符串 |
+| `${__UUID()}` | `{{uuid}}` | 随机 UUID |
+| `${__counter(...)}` | `{{seq}}` | 每次求值递增 |
+| `${__time()}` | `{{timestamp}}` | 毫秒级时间戳 |
+| `${__time(/1000)}` | `{{unix}}` | 秒级时间戳 |
+
+这些引用在 JMeter 里每次求值都取新值，与 go-stress 动态变量函数的语义一致，翻译前后负载模型不变
+
+**没有等价物的函数原样保留并记 WARN**，例如 `${__time(yyyy/MM/dd)}`（带格式串的时间）、`${__machineName()}`、`${__threadNum()}` — 请改写为 go-stress 的[变量函数](VARIABLES.md)（`{{date "格式串"}}` 可覆盖常见日期需求）
+
+#### 参数化配置元件
+
+| JMeter 元素 | go-stress | 条件 |
+|:------------|:----------|:-----|
+| `CounterConfig` | 引用处译为 `{{seq}}` | 需有变量名（`CounterConfig.name`） |
+| `RandomVariableConfig` | 引用处译为 `{{randomInt 最小 最大}}` | 变量名与上下限（`minimumValue`/`maximumValue`）齐全且为纯数字 |
+
+例如组级放了变量名为 `rnd_page`、范围 1~10 的 `RandomVariableConfig`，采样器 path 里的 `${rnd_page}` 会被译成 `{{randomInt 1 10}}`；计数器变量 `seq_no` 同理译成 `{{seq}}`
+
+映射过程会写进转换报告（`✓ 计数器「seq_no」→ 内置变量函数 {{seq}}`），变量名或上下限不全时记 WARN 并保留原样，便于在 YAML 里手工补全
 
 ## 🔗 执行顺序与失败传播
 
@@ -176,9 +202,9 @@ JMeter 的采样器在每轮循环里**全部按序执行**，而 go-stress 在�
 
 ### WARN — 只影响校验强度或统计口径
 
-`XPathAssertion`、`XPath2Assertion`、`HTMLAssertion`、`MD5HexAssertion`、`SMIMEAssertion`、`CompareAssertion`、`XPathExtractor`、`XPath2Extractor`、`HtmlExtractor`、`BoundaryExtractor`、`UserParameters`、`RandomVariableConfig`、`CounterConfig`、`DNSCacheManager`、`KeystoreConfig`、`LoginConfig`、`setUp`/`tearDown` 线程组
+`XPathAssertion`、`XPath2Assertion`、`HTMLAssertion`、`MD5HexAssertion`、`SMIMEAssertion`、`CompareAssertion`、`XPathExtractor`、`XPath2Extractor`、`HtmlExtractor`、`BoundaryExtractor`、`UserParameters`、`DNSCacheManager`、`KeystoreConfig`、`LoginConfig`、`setUp`/`tearDown` 线程组
 
-其中部分有替代写法：`BoundaryExtractor` 可改写成正则提取器，`CounterConfig` 可改用内置的 `seq` 函数，`RandomVariableConfig` 可改用 `randomInt` 等函数，`UserParameters` 可改用 CSV 数据源
+其中部分有替代写法：`BoundaryExtractor` 可改写成正则提取器，`UserParameters` 可改用 CSV 数据源；`CounterConfig` 与 `RandomVariableConfig` 已能直接映射到内置的 `seq` / `randomInt` 函数（见上文「参数化配置元件」），仅在变量名或参数不全时记 WARN
 
 ### INFO — 对负载无影响，静默忽略
 
