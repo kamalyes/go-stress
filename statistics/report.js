@@ -1231,9 +1231,10 @@ function generateDetailContent(req) {
         html += '<div style="margin-bottom:8px;"><strong>⚙️ 操作符:</strong> ' + escapeHtml(operatorText) + '</div>';
       }
       
-      if (verify.expected !== undefined && verify.expected !== null) {
-        html += '<div style="margin-bottom:8px;"><strong>✓ 期望值:</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' + 
-          escapeHtml(String(verify.expected)) + '</code></div>';
+      // 后端 VerifyResult 的字段名是 expect，不是 expected
+      if (verify.expect !== undefined && verify.expect !== null) {
+        html += '<div style="margin-bottom:8px;"><strong>✓ 期望值:</strong> <code style="background:#f8f9fa;padding:2px 6px;border-radius:3px;">' +
+          escapeHtml(String(verify.expect)) + '</code></div>';
       }
       
       if (verify.actual !== undefined && verify.actual !== null) {

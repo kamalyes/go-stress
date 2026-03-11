@@ -447,24 +447,28 @@ function generateConfigFromForm() {
     }
     
     // 校验规则
+    // 注意：VerifyConfig 的 JSON 字段是 type/jsonpath/expect，期望值统一写 expect，
+    // 类型值必须用后端常量（STATUS_CODE/JSONPATH/CONTAINS），否则后端走 default 分支静默放行
     const verifyRules = [];
     document.querySelectorAll(SELECTORS.VERIFY_LIST).forEach(item => {
-        const rule = {
-            type: item.querySelector('[name="verifyType"]').value
-        };
-        
-        const statusCode = item.querySelector('[name="statusCode"]')?.value;
-        if (statusCode) rule.status_code = parseInt(statusCode);
-        
-        const jsonPath = item.querySelector('[name="jsonPath"]')?.value;
-        if (jsonPath) rule.jsonpath = jsonPath;
-        
-        const expectedValue = item.querySelector('[name="expectedValue"]')?.value;
-        if (expectedValue) rule.expected = expectedValue;
-        
-        const contains = item.querySelector('[name="contains"]')?.value;
-        if (contains) rule.contains = contains;
-        
+        const type = item.querySelector('[name="verifyType"]').value;
+        const rule = { type: type };
+
+        // 三种类型各只有一个输入框参与期望值，统一落到 expect
+        if (type === 'STATUS_CODE') {
+            const statusCode = item.querySelector('[name="statusCode"]')?.value;
+            if (statusCode) rule.expect = parseInt(statusCode, 10);
+        } else if (type === 'JSONPATH') {
+            const jsonPath = item.querySelector('[name="jsonPath"]')?.value;
+            if (jsonPath) rule.jsonpath = jsonPath;
+
+            const expectedValue = item.querySelector('[name="expectedValue"]')?.value;
+            if (expectedValue) rule.expect = expectedValue;
+        } else if (type === 'CONTAINS') {
+            const contains = item.querySelector('[name="contains"]')?.value;
+            if (contains) rule.expect = contains;
+        }
+
         verifyRules.push(rule);
     });
     if (verifyRules.length > 0) {
@@ -592,9 +596,9 @@ function addVerify() {
             <div class="form-group">
                 <label>校验类型</label>
                 <select name="verifyType" onchange="toggleVerifyFields(this)">
-                    <option value="status">状态码</option>
-                    <option value="jsonpath">JSON路径</option>
-                    <option value="contains">包含文本</option>
+                    <option value="STATUS_CODE">状态码</option>
+                    <option value="JSONPATH">JSON路径</option>
+                    <option value="CONTAINS">包含文本</option>
                 </select>
             </div>
             <div class="form-group verify-status">
@@ -627,11 +631,11 @@ function toggleVerifyFields(select) {
         el.style.display = 'none';
     });
     
-    if (type === 'status') {
+    if (type === 'STATUS_CODE') {
         item.querySelectorAll('.verify-status').forEach(el => el.style.display = 'block');
-    } else if (type === 'jsonpath') {
+    } else if (type === 'JSONPATH') {
         item.querySelectorAll('.verify-jsonpath').forEach(el => el.style.display = 'block');
-    } else if (type === 'contains') {
+    } else if (type === 'CONTAINS') {
         item.querySelectorAll('.verify-contains').forEach(el => el.style.display = 'block');
     }
 }
