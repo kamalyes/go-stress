@@ -99,7 +99,9 @@ func (r *DependencyResolver) resolveDependencies() error {
 	}
 
 	r.executionOrder = order
-	r.logger.Info("📋 API执行顺序: %v", r.executionOrder)
+	if r.logger != nil {
+		r.logger.Info("📋 API执行顺序: %v", r.executionOrder)
+	}
 	return nil
 }
 

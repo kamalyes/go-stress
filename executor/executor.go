@@ -52,6 +52,10 @@ type Executor struct {
 
 // NewExecutor 根据存储模式创建执行器（使用存储工厂）
 func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string, log logger.ILogger) (*Executor, error) {
+	// 把日志器注入配置：依赖解析器等下游组件经 cfg.GetLogger() 取用，
+	// 不注入的话任何带 depends_on/extractors 的配置都会在 nil 上调用而 panic
+	cfg.SetLogger(log)
+
 	// 先创建 Executor 实例
 	e := &Executor{
 		config:        cfg,

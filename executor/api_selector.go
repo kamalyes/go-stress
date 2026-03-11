@@ -216,7 +216,9 @@ func CreateAPISelector(cfg *config.Config) APISelector {
 	if hasDeps {
 		selector, err := NewDependencySelector(cfg.APIs, cfg.GetLogger())
 		if err != nil {
-			cfg.GetLogger().Error("创建依赖选择器失败: %v，回退到轮询模式", err)
+			if log := cfg.GetLogger(); log != nil {
+				log.Error("创建依赖选择器失败: %v，回退到轮询模式", err)
+			}
 			return NewRoundRobinSelector(cfg.APIs)
 		}
 		return selector

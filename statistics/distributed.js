@@ -408,9 +408,11 @@ function generateConfigFromForm() {
     };
     
     // 路径
+    // 注意：Config 顶层没有 path 字段，且 Loader 开了「拒绝未知字段」，
+    // 单独写 config.path 会让任务创建直接报错；填了路径就拼进完整 URL
     const path = document.getElementById('path').value.trim();
     if (path) {
-        config.path = path;
+        config.url = config.url.replace(/\/+$/, '') + (path.startsWith('/') ? path : '/' + path);
     }
     
     // 渐进启动
@@ -471,10 +473,7 @@ function generateConfigFromForm() {
 
         verifyRules.push(rule);
     });
-    if (verifyRules.length > 0) {
-        config.verify = verifyRules;
-    }
-    
+
     // 提取器
     const extractors = [];
     document.querySelectorAll(SELECTORS.EXTRACTOR_LIST).forEach(item => {
@@ -494,10 +493,22 @@ function generateConfigFromForm() {
         
         extractors.push(extractor);
     });
-    if (extractors.length > 0) {
-        config.extractors = extractors;
+
+    // 校验规则与提取器必须挂在 API 上：
+    // Config 顶层的 verify 只支持单条（*VerifyConfig），顶层也没有 extractors 字段，
+    // 数组形态会被 Loader 的「拒绝未知字段」拦下导致任务创建失败。
+    // API 只写 name，URL/method/headers/body 由公共配置经 mergeAPIsWithCommon 继承
+    if (verifyRules.length > 0 || extractors.length > 0) {
+        const api = { name: 'main' };
+        if (verifyRules.length > 0) {
+            api.verify = verifyRules;
+        }
+        if (extractors.length > 0) {
+            api.extractors = extractors;
+        }
+        config.apis = [api];
     }
-    
+
     return config;
 }
 
@@ -859,7 +870,7 @@ function renderSlaves(slaves) {
             </div>
             <div class="slave-info">
                 <div><span>📍 区域:</span><span>${escapeHtml(slave.region || UI_TEXT.DEFAULT_REGION)}</span></div>
-                <div><span>📊 负载:</span><span>${slave.load || 0}</span></div>
+                <div><span>📊 负载:</span><span>${slave.current_load || 0}</span></div>
                 <div><span>🔢 任务数:</span><span>${slave.running_tasks?.length || 0}</span></div>
                 <div><span>💓 心跳:</span><span>${formatTime(slave.last_heartbeat)}</span></div>
             </div>

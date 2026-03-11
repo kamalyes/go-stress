@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,8 +97,14 @@ type SendMessageResponse struct {
 	} `json:"data"`
 }
 
-var tokens = make(map[string]string)   // token -> userID
-var sessions = make(map[string]string) // sessionID -> ticketID
+// tokens/sessions 会被多个 HTTP handler 并发读写，必须加锁保护，
+// 否则高并发下触发 runtime 的 concurrent map writes fatal error
+var (
+	tokensMu   sync.RWMutex
+	tokens     = make(map[string]string) // token -> userID
+	sessionsMu sync.RWMutex
+	sessions   = make(map[string]string) // sessionID -> ticketID
+)
 
 // WebSocket 升级器
 var upgrader = websocket.Upgrader{
@@ -175,7 +182,9 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 生成token和userID
 	token := uuid.New().String()
 	userID := uuid.New().String()
+	tokensMu.Lock()
 	tokens[token] = userID
+	tokensMu.Unlock()
 
 	// 设置session header
 	w.Header().Set("X-Session-ID", fmt.Sprintf("sess_%d", time.Now().Unix()))
@@ -211,7 +220,9 @@ func handleGetUserInfo(w http.ResponseWriter, r *http.Request) {
 	var token string
 	fmt.Sscanf(authHeader, "Bearer %s", &token)
 
+	tokensMu.RLock()
 	userID, exists := tokens[token]
+	tokensMu.RUnlock()
 	if !exists {
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{"error": "无效的token"})
@@ -250,7 +261,9 @@ func handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	var token string
 	fmt.Sscanf(authHeader, "Bearer %s", &token)
 
+	tokensMu.RLock()
 	userID, exists := tokens[token]
+	tokensMu.RUnlock()
 	if !exists {
 		w.WriteHeader(http.StatusUnauthorized)
 		json.NewEncoder(w).Encode(map[string]string{"error": "无效的token"})
@@ -309,7 +322,9 @@ func handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 	agentID := "owner"
 
 	// 存储 session
+	sessionsMu.Lock()
 	sessions[sessionID] = ticketID
+	sessionsMu.Unlock()
 
 	ticket := Ticket{
 		TicketID:  ticketID,
@@ -345,7 +360,9 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 验证 session
+	sessionsMu.RLock()
 	ticketID, exists := sessions[req.SessionID]
+	sessionsMu.RUnlock()
 	if !exists {
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]string{"error": "session不存在"})
