@@ -51,13 +51,13 @@ type StatsBuffer struct {
 // NewStatsBuffer 创建统计缓冲区
 func NewStatsBuffer(slaveID string, maxSize int, log logger.ILogger) *StatsBuffer {
 	return &StatsBuffer{
-		slaveID:   slaveID,
-		buffer:    make([]*types.RequestResult, 0, maxSize),
-		bufferMu:  syncx.NewLock(),
-		maxSize:   maxSize,
-		streamMu:  syncx.NewLock(),
-		backlogMu: syncx.NewLock(),
-		logger:    log,
+		slaveID:     slaveID,
+		buffer:      make([]*types.RequestResult, 0, maxSize),
+		bufferMu:    syncx.NewLock(),
+		maxSize:     maxSize,
+		streamMu:    syncx.NewLock(),
+		backlogMu:   syncx.NewLock(),
+		logger:      log,
 		taskManager: syncx.NewPeriodicTaskManager(),
 	}
 }

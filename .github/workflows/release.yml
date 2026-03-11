@@ -41,7 +41,43 @@ on:
         default: ''
 
 jobs:
+  # 发布门禁：测试不过就不许发
+  #
+  # v1.0.0 是在测试全红的状态下打标发布的 —— statistics/timeseries_test.go
+  # 当时就能抓住那个首次采样即 panic 的缺陷，但它从未被执行：
+  # test.yml 只在 push 到 master/develop 与 PR 时触发，不在 tag 推送时触发；
+  # 而本工作流由 tag 触发，build 只做交叉编译，release 只 needs: build，
+  # 于是推一个 tag 就能把崩溃的二进制直接发上去
+  test:
+    name: 🧪 Test Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ github.event.inputs.go-version || '1.26' }}
+          cache: true
+
+      - name: 📐 Check gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未格式化:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: 🔍 Go vet
+        run: go vet ./...
+
+      - name: 🧪 Test with race detector
+        run: go test -race ./... -timeout 15m
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     env:
       UPX_VERSION: ${{ github.event.inputs.upx-version || '5.1.0' }}

@@ -42,15 +42,15 @@ const masterLostAbortThreshold = 3
 
 // Slave Slave 节点 - 使用 syncx 模块重构
 type Slave struct {
-	config        *common.SlaveConfig
-	info          *common.SlaveInfo
-	collector     *statistics.Collector // 持久化 Collector，用于查询历史数据
-	statsBuffer   *StatsBuffer
-	monitor       *ResourceMonitor
-	grpcServer    *grpc.Server
-	masterClient  pb.MasterServiceClient
-	masterConn    *grpc.ClientConn
-	logger logger.ILogger
+	config       *common.SlaveConfig
+	info         *common.SlaveInfo
+	collector    *statistics.Collector // 持久化 Collector，用于查询历史数据
+	statsBuffer  *StatsBuffer
+	monitor      *ResourceMonitor
+	grpcServer   *grpc.Server
+	masterClient pb.MasterServiceClient
+	masterConn   *grpc.ClientConn
+	logger       logger.ILogger
 	// running Slave 生命周期标志（Start/Stop 幂等保护）
 	running *syncx.Bool // 使用 syncx.Bool
 	// cancelFunc Slave 自身生命周期的取消函数（由 Start 设置，Stop 调用）
@@ -65,8 +65,8 @@ type Slave struct {
 	// taskCancel 当前任务的取消函数。
 	// ⚠️ 与 cancelFunc 严格分离：旧实现在 ExecuteTask 里复用 cancelFunc
 	// 字段，Stop 时误杀的是任务 context，Slave 生命周期 context 反而泄漏
-	taskCancel        context.CancelFunc
-	heartbeatTask     *syncx.PeriodicTaskManager // 使用 syncx.PeriodicTask 管理心跳
+	taskCancel    context.CancelFunc
+	heartbeatTask *syncx.PeriodicTaskManager // 使用 syncx.PeriodicTask 管理心跳
 	// heartbeatFails 心跳连续失败计数（Master 失联检测）
 	heartbeatFails atomic.Int32
 }
