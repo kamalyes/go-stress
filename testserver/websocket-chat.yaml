@@ -8,12 +8,15 @@ requests: 1000
 timeout: 10s
 
 # 模拟聊天消息
+# 注意：body 里的模板函数必须是 VariableResolver 已注册的（见 config/variable.go）。
+# 此前 content 写的 {{randomSentence}} 并未注册，模板解析失败导致 {{seq}} 等
+# 占位符也全部原样发出，服务端收到非法 JSON 直接断连
 body: |
   {
     "action": "chat",
     "message_id": {{seq}},
     "data": {
-      "content": "{{randomString 10}}: {{randomSentence}}",
+      "content": "{{randomString 10}}: {{randomString 20}}",
       "user_id": "user_{{randomInt 1 100}}",
       "room_id": "room_{{randomInt 1 5}}",
       "timestamp": {{unix}}

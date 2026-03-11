@@ -11,6 +11,7 @@
 package executor
 
 import (
+	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/config"
 )
 
@@ -18,16 +19,18 @@ import (
 type VariableReplacer struct {
 	resolver      *config.VariableResolver // 动态变量解析器（如 {{$timestamp}}）
 	extractedVars map[string]string        // 提取的变量（如从上一个API响应中提取的）
+	logger        logger.ILogger           // 解析失败告警用，可为 nil
 }
 
 // NewVariableReplacer 创建变量替换器
-func NewVariableReplacer(resolver *config.VariableResolver, extractedVars map[string]string) *VariableReplacer {
+func NewVariableReplacer(resolver *config.VariableResolver, extractedVars map[string]string, log logger.ILogger) *VariableReplacer {
 	if extractedVars == nil {
 		extractedVars = make(map[string]string)
 	}
 	return &VariableReplacer{
 		resolver:      resolver,
 		extractedVars: extractedVars,
+		logger:        log,
 	}
 }
 
@@ -61,7 +64,16 @@ func (vr *VariableReplacer) ReplaceString(s string) string {
 
 	// 第二步：替换动态变量（如 {{$timestamp}}）
 	if vr.resolver != nil {
-		if resolved, err := vr.resolver.Resolve(s); err == nil {
+		resolved, err := vr.resolver.Resolve(s)
+		if err != nil {
+			// 解析失败时保留原文继续发，但必须留下线索。此前静默吞错：
+			// 模板里一个未注册的函数就会让整个模板原样发出（占位符全在），
+			// 比如发给 WebSocket/JSON 接口的 body 因此变成非法 JSON，
+			// 报告里只看得到一堆莫名其妙的连接错误
+			if vr.logger != nil {
+				vr.logger.Warnf("⚠️  变量解析失败，将保留原文发送: %v", err)
+			}
+		} else {
 			s = resolved
 		}
 	}

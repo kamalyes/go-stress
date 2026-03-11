@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,8 +93,13 @@ type SendMessageRequest struct {
 
 type SendMessageResponse struct {
 	Data struct {
-		MessageID string `json:"message_id"`
-		Status    string `json:"status"`
+		MessageID  string `json:"message_id"`
+		Status     string `json:"status"`
+		SessionID  string `json:"session_id"`
+		SenderID   string `json:"sender_id"`
+		ReceiverID string `json:"receiver_id"`
+		MsgType    string `json:"msg_type"`
+		SeqNo      string `json:"seq_no"`
 	} `json:"data"`
 }
 
@@ -318,7 +324,10 @@ func handleCreateTicket(w http.ResponseWriter, r *http.Request) {
 
 	// 生成 ticket 数据
 	ticketID := uuid.New().String()
-	sessionID := fmt.Sprintf("%x", uuid.New().ID())[:32]
+	// uuid.ID() 返回 uint32，%x 最多只有 8 个字符，再切 [:32] 必然越界 panic，
+	// 导致创建工单接口从未成功过。改用去掉连字符的完整 UUID：恰好 32 位
+	// 小写十六进制，与下游校验规则 ^[a-z0-9]{32}$ 对齐
+	sessionID := strings.ReplaceAll(uuid.New().String(), "-", "")
 	agentID := "owner"
 
 	// 存储 session
@@ -372,9 +381,21 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	// 生成消息 ID
 	messageID := uuid.New().String()
 
+	// 回显请求关键字段：ticket-and-send.yaml 的校验规则靠它们做链路一致性
+	// 检查（消息会话 ID 必须等于工单会话 ID 等），此前响应只有 message_id
+	// 和 status，4 条交叉校验必然失败
 	var resp SendMessageResponse
 	resp.Data.MessageID = messageID
 	resp.Data.Status = "sent"
+	resp.Data.SessionID = req.SessionID
+	resp.Data.SenderID = req.SenderID
+	resp.Data.ReceiverID = req.ReceiverID
+	resp.Data.SeqNo = req.SeqNo
+	if req.MsgType == 1 {
+		resp.Data.MsgType = "MESSAGE_TYPE_TEXT"
+	} else {
+		resp.Data.MsgType = fmt.Sprintf("MESSAGE_TYPE_%d", req.MsgType)
+	}
 
 	log.Printf("✅ 发送消息: messageID=%s, sessionID=%s, ticketID=%s, content=%s",
 		messageID, req.SessionID, ticketID, req.Content)
@@ -398,6 +419,8 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("❌ WebSocket 读取错误: %v", err)
+			} else {
+				log.Printf("❌ WebSocket 消息解析失败（连接将关闭）: %v", err)
 			}
 			break
 		}
@@ -511,6 +534,10 @@ func handleWebSocketChat(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("❌ Chat 读取错误: %v", err)
+			} else {
+				// JSON 解析失败也要留痕：压测客户端发的 body 本身是坏 JSON 时，
+				// 静默断连只会让对端表现出一堆莫名其妙的连接错误
+				log.Printf("❌ Chat 消息解析失败（连接将关闭）: %v", err)
 			}
 			break
 		}

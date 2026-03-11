@@ -279,7 +279,7 @@ func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource
 	}
 
 	// 使用统一的变量替换器（同时处理提取变量和动态变量）
-	replacer := NewVariableReplacer(w.varResolver, w.depContext.extractedVars)
+	replacer := NewVariableReplacer(w.varResolver, w.depContext.extractedVars, w.logger)
 	apiCfg = replacer.ReplaceInAPIConfig(apiCfg)
 
 	// 构建请求
@@ -344,7 +344,7 @@ func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource
 // recordSkippedRequest 记录跳过的请求
 func (w *Worker) recordSkippedRequest(apiCfg *APIConfig, groupID uint64) {
 	// 使用统一的变量替换器
-	replacer := NewVariableReplacer(w.varResolver, w.depContext.extractedVars)
+	replacer := NewVariableReplacer(w.varResolver, w.depContext.extractedVars, w.logger)
 	apiCfg = replacer.ReplaceInAPIConfig(apiCfg)
 
 	// 找出具体失败的依赖API
@@ -589,32 +589,35 @@ func (w *Worker) executeVerifications(apiCfg *APIConfig, resp *Response) error {
 		verifyConfig := verifyCfg
 
 		// 解析验证配置中的变量（特别是 expect 字段）
+		//
+		// 顺序必须是「先依赖变量、后动态模板」，与 body 路径的 ReplaceString 一致。
+		// 反过来会出事：{{.create_ticket.session_id}} 这种依赖占位符先经过
+		// varResolver.Resolve，模板里查不到这个键会渲染成 <no value>，
+		// 之后的 replaceVars 再也匹配不到原占位符，交叉校验的期望值就永久失真
 		if verifyConfig.Expect != nil {
 			// 如果是字符串类型，才进行变量替换
 			if expectStr, ok := verifyConfig.Expect.(string); ok {
-				// 先用 varResolver 解析配置变量（如 {{.session_id}}）
+				// 第一步：替换依赖变量占位符（如 {{.send_message.message_id}}）
+				expectStr = replaceVars(expectStr, w.depContext.extractedVars)
+				// 第二步：再用 varResolver 解析动态模板（如 {{randomString 8}}）
 				if w.varResolver != nil {
 					if resolved, err := w.varResolver.Resolve(expectStr); err == nil {
 						expectStr = resolved
 					}
 				}
-				// 再替换依赖变量占位符（如 {{.send_message.message_id}}）
-				resolvedExpect := replaceVars(expectStr, w.depContext.extractedVars)
-				verifyConfig.Expect = resolvedExpect
+				verifyConfig.Expect = expectStr
 			}
 			// 如果是其他类型（int, float64等），保持原样
 		}
 
-		// 解析 JSONPath 中的变量
+		// 解析 JSONPath 中的变量（顺序同理：依赖变量先行）
 		if verifyConfig.JSONPath != "" {
-			// 先用 varResolver 解析
+			verifyConfig.JSONPath = replaceVars(verifyConfig.JSONPath, w.depContext.extractedVars)
 			if w.varResolver != nil {
 				if resolved, err := w.varResolver.Resolve(verifyConfig.JSONPath); err == nil {
 					verifyConfig.JSONPath = resolved
 				}
 			}
-			// 再替换依赖变量
-			verifyConfig.JSONPath = replaceVars(verifyConfig.JSONPath, w.depContext.extractedVars)
 		}
 
 		// 直接创建HTTP验证器（使用 verify 模块）
