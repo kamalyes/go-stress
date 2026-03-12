@@ -296,6 +296,13 @@ type jmxConverter struct {
 	// go-stress 动态变量函数，引用处直接替换
 	paramVars map[string]string
 
+	// skippedContainers 因会改变负载而跳过的容器类元素标签
+	//
+	// 真实脚本里采样器几乎总是嵌在某种控制器下。被跳过的容器里若正好装着
+	// 全部采样器，最终就会得到「没有启用的 HTTP 采样器」—— 这句话字面没错，
+	// 却会让使用者以为文件损坏或版本不兼容，而真正该看的是那些控制器
+	skippedContainers []string
+
 	// timeouts 脚本里出现过的超时设定
 	//
 	// JMeter 的超时既可以写在 HTTP 请求默认值里，也可以逐个写在采样器上
@@ -336,11 +343,34 @@ func (c *jmxConverter) convert(root *jmxNode) (*Config, error) {
 		return nil, fmt.Errorf("脚本中没有启用的线程组（ThreadGroup），无从得出并发与请求数")
 	}
 	if len(cfg.APIs) == 0 {
+		if len(c.skippedContainers) > 0 {
+			return nil, fmt.Errorf(
+				"脚本里的 HTTP 采样器都嵌在会改变负载的容器内（%s），"+
+					"这些容器决定了「发哪些请求、发几次」，摊平导入得到的不是同一个测试；"+
+					"请把采样器移出这些容器，或拆成不含它们的脚本后再导入",
+				strings.Join(uniqueStrings(c.skippedContainers), "、"))
+		}
 		return nil, fmt.Errorf("脚本中没有启用的 HTTP 采样器（HTTPSamplerProxy），没有可发的请求")
 	}
 
 	// 超时统一取舍：采样器与 HTTP 请求默认值都可能带超时
 	c.resolveTimeout(cfg)
+
+	// 测试计划层的请求头按 JMeter 的作用域规则下发给每个采样器
+	//
+	// 挂在 TestPlan 下的 HeaderManager 对计划内所有采样器生效。此前这些头只
+	// 存进 cfg.Headers 就不管了，而把 cfg.Headers 合并进各 api 的
+	// mergeAPIsWithCommon 只在配置文件加载器里调用 —— -jmx 这条路径压根不走它
+	//
+	// 后果是多接口脚本里，计划层的头在运行时全部消失：脚本里写了
+	// Authorization，压出来每个请求都 401，而报告里只说「全局请求头 N 条 → headers」
+	if len(cfg.Headers) > 0 && len(cfg.APIs) > 0 {
+		for i := range cfg.APIs {
+			cfg.APIs[i].Headers = mergeHeaders(cfg.Headers, cfg.APIs[i].Headers)
+		}
+		c.report.addMapped("计划层请求头 %d 条 → 已下发给全部 %d 个请求",
+			len(cfg.Headers), len(cfg.APIs))
+	}
 
 	// 把采样器串成依赖链，使它们按脚本顺序逐个执行
 	//
@@ -440,7 +470,7 @@ func (c *jmxConverter) walkPlanTree(tree *jmxNode, cfg *Config) int {
 				continue
 			}
 			c.applyThreadGroup(node, cfg)
-			c.walkGroupTree(p.Tree, cfg, nil)
+			c.walkGroupTree(p.Tree, cfg, nil, nil)
 			groups++
 
 		// 全局作用域的元素：挂在测试计划下，对所有采样器生效
@@ -544,12 +574,41 @@ func (c *jmxConverter) applyThreadGroup(n *jmxNode, cfg *Config) {
 	c.report.addMapped("线程组「%s」→ %s", n.label(), detail)
 }
 
+// loadNeutralControllers 纯分组容器：只影响脚本的组织与报表，不改变发出的请求
+//
+// 真实脚本极少把采样器直接挂在线程组下，绝大多数会先套一层分组容器。
+// 345 份真实脚本的语料里，有 86 份只因为采样器嵌在这类容器里就被判成
+// 「没有启用的 HTTP 采样器」而整份拒绝 —— 占全部语料的四分之一
+//
+//   - GenericController       GUI 里的「简单控制器」，纯分组，零逻辑
+//   - TransactionController   把若干采样器归并成一次事务来统计；
+//     parent / includeTimers 只影响报表里是否生成父样本，
+//     子采样器仍按顺序逐个发出
+//   - RecordingController     脚本录制器存放采样结果的容器，运行时无行为
+//
+// 其余控制器（If / Loop / Throughput / OnceOnly / Module / Random /
+// TestFragment 等）都会改变「发哪些请求、发几次」，仍按 FATAL 拒绝 ——
+// 尤其 TestFragment 在没有 ModuleController 引用时根本不执行，
+// 下探进去等于凭空多发一批 JMeter 不会发的请求
+var loadNeutralControllers = map[string]bool{
+	"GenericController":     true,
+	"TransactionController": true,
+	"RecordingController":   true,
+}
+
 // walkGroupTree 遍历线程组下的元素
-// inherited 为来自上层的思考时间，供采样器在自身未配置时继承
-func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *ThinkTimeConfig) {
+//
+// inheritedHeaders / inherited 为来自上层作用域的请求头与思考时间，
+// 下探进分组容器时原样传入 —— JMeter 的配置元件对其所在层级之下的
+// 全部采样器生效，嵌套一层不会让外层的头失效
+func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inheritedHeaders map[string]string, inherited *ThinkTimeConfig) {
 	// 先扫一遍，收集作用于整组的元素（JMeter 的作用域规则：
 	// 同层级的配置元件对该层级下所有采样器生效，与书写顺序无关）
 	groupHeaders := map[string]string{}
+	for k, v := range inheritedHeaders {
+		groupHeaders[k] = v
+	}
+	ownHeaders := 0
 	groupThink := inherited
 	for _, p := range pairsOf(tree) {
 		n := p.Node
@@ -560,6 +619,7 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 		case "HeaderManager":
 			for k, v := range c.readHeaders(n) {
 				groupHeaders[k] = v
+				ownHeaders++
 			}
 		case "ConstantTimer", "UniformRandomTimer", "GaussianRandomTimer":
 			if tt := c.readTimer(n); tt != nil {
@@ -575,8 +635,8 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 			c.applyHTTPDefaults(n, cfg)
 		}
 	}
-	if len(groupHeaders) > 0 {
-		c.report.addMapped("线程组级请求头 %d 条 → 应用到该组所有请求", len(groupHeaders))
+	if ownHeaders > 0 {
+		c.report.addMapped("线程组级请求头 %d 条 → 应用到该组所有请求", ownHeaders)
 	}
 	if groupThink != nil && groupThink != inherited {
 		c.report.addMapped("线程组级思考时间 → %s", describeThinkTime(groupThink))
@@ -595,6 +655,13 @@ func (c *jmxConverter) walkGroupTree(tree *jmxNode, cfg *Config, inherited *Thin
 			if api != nil {
 				cfg.APIs = append(cfg.APIs, *api)
 			}
+
+		// 纯分组容器：下探进去，其子元素等同于摊平在本层（理由见 loadNeutralControllers）
+		case "GenericController", "TransactionController", "RecordingController":
+			before := len(cfg.APIs)
+			c.walkGroupTree(p.Tree, cfg, groupHeaders, groupThink)
+			c.report.addMapped("%s「%s」→ 纯分组容器，已展开其中 %d 个请求（不影响发出的负载）",
+				n.tag(), n.label(), len(cfg.APIs)-before)
 
 		// 上面已统一处理过，这里不再重复报告
 		case "HeaderManager", "ConstantTimer", "UniformRandomTimer", "GaussianRandomTimer",
@@ -1249,7 +1316,6 @@ func (c *jmxConverter) dropUnknown(n *jmxNode) {
 		"BeanShellSampler":          "BeanShell 采样器自行发起请求，无法转换",
 		"AuthManager":               "HTTP 授权管理器会自动附加认证头，缺了它请求可能全部被拒",
 		"CookieManager":             "Cookie 管理器维护会话，缺了它依赖登录态的请求会失败",
-		"TransactionController":     "事务控制器会聚合子请求的耗时统计，指标口径与导入后不同",
 		"ModuleController":          "模块控制器引用别处的可控制器，内容不在本处",
 		"IncludeController":         "包含控制器引用外部 .jmx 文件，内容不在本处",
 		"TestFragmentController":    "测试片段需由模块控制器引用才会执行",
@@ -1258,22 +1324,27 @@ func (c *jmxConverter) dropUnknown(n *jmxNode) {
 
 	// 只影响校验强度或统计呈现，不改变发出的请求
 	warn := map[string]string{
-		"XPathAssertion":     "XPath 断言不受支持（go-stress 面向 JSON，无 XML 路径验证）",
-		"XPath2Assertion":    "XPath2 断言不受支持",
-		"HTMLAssertion":      "HTML 合法性断言不受支持",
-		"MD5HexAssertion":    "MD5 断言不受支持",
-		"SMIMEAssertion":     "SMIME 断言不受支持",
-		"CompareAssertion":   "比较断言不受支持",
-		"XPathExtractor":     "XPath 提取器不受支持",
-		"XPath2Extractor":    "XPath2 提取器不受支持",
-		"HtmlExtractor":      "CSS/jQuery 提取器不受支持",
-		"BoundaryExtractor":  "边界提取器不受支持，可改写成正则提取器",
-		"DebugPostProcessor": "调试后置处理器只产出调试信息，无需转换",
-		"DebugSampler":       "调试采样器不发真实请求",
-		"UserParameters":     "用户参数（按线程轮换的变量）不受支持，可改用 CSV 数据源",
-		"DNSCacheManager":    "DNS 缓存管理器不受支持",
-		"KeystoreConfig":     "密钥库配置不受支持",
-		"LoginConfig":        "登录配置不受支持",
+		// 这三个纯分组容器在 walkGroupTree 里会被下探，正常不会走到这里；
+		// 若出现在不该出现的层级（如直接挂在测试计划下），只提示口径差异
+		"TransactionController": "事务控制器的子请求已逐个导入，但「一次事务」的合并耗时统计不复现",
+		"GenericController":     "简单控制器的子请求已逐个导入",
+		"RecordingController":   "录制容器的子请求已逐个导入",
+		"XPathAssertion":        "XPath 断言不受支持（go-stress 面向 JSON，无 XML 路径验证）",
+		"XPath2Assertion":       "XPath2 断言不受支持",
+		"HTMLAssertion":         "HTML 合法性断言不受支持",
+		"MD5HexAssertion":       "MD5 断言不受支持",
+		"SMIMEAssertion":        "SMIME 断言不受支持",
+		"CompareAssertion":      "比较断言不受支持",
+		"XPathExtractor":        "XPath 提取器不受支持",
+		"XPath2Extractor":       "XPath2 提取器不受支持",
+		"HtmlExtractor":         "CSS/jQuery 提取器不受支持",
+		"BoundaryExtractor":     "边界提取器不受支持，可改写成正则提取器",
+		"DebugPostProcessor":    "调试后置处理器只产出调试信息，无需转换",
+		"DebugSampler":          "调试采样器不发真实请求",
+		"UserParameters":        "用户参数（按线程轮换的变量）不受支持，可改用 CSV 数据源",
+		"DNSCacheManager":       "DNS 缓存管理器不受支持",
+		"KeystoreConfig":        "密钥库配置不受支持",
+		"LoginConfig":           "登录配置不受支持",
 	}
 
 	// 纯粹的结果收集与展示，对负载没有任何影响
@@ -1284,6 +1355,11 @@ func (c *jmxConverter) dropUnknown(n *jmxNode) {
 		"SimpleDataWriter": true, "AssertionVisualizer": true, "ComparisonVisualizer": true,
 		"MailerResultCollector": true, "BackendListener": true, "TestPlan": true,
 		"WorkBench": true, "kg.apc.jmeter.vizualizers.CorrectedResultCollector": true,
+	}
+
+	// 记下被跳过的容器类元素，供「一个采样器都没找到」时给出有用的原因
+	if strings.HasSuffix(tag, "Controller") || tag == "InterleaveControl" || tag == "RunTime" {
+		c.skippedContainers = append(c.skippedContainers, tag)
 	}
 
 	switch {
@@ -1446,4 +1522,18 @@ func (c *jmxConverter) applyHTTPDefaults(n *jmxNode, cfg *Config) {
 	}
 
 	c.report.addMapped("HTTP 请求默认值「%s」→ %s", n.label(), strings.Join(parts, " "))
+}
+
+// uniqueStrings 去重且保持原序
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }

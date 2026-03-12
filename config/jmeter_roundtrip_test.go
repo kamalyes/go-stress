@@ -843,3 +843,197 @@ func TestImportConflictingTimeouts(t *testing.T) {
 		"取最大：取最小会让本可跑更久的请求被提前判超时")
 	assert.Contains(t, rep.String(), "不同的超时设定")
 }
+
+// 以下用例全部源自真实语料：从 GitHub 公开仓库取了 345 份 .jmx
+// （0.8KB ~ 309KB），对每份做「导入 → 导出 → 再导入 → 再导出」。
+// 这批缺陷都不是手写 fixture 能想到的，而是真实脚本逼出来的
+
+// TestImportNestedSamplers 采样器嵌在纯分组容器里也要能找到
+//
+// 真实脚本极少把采样器直接挂在线程组下。语料里 345 份有 86 份只因为采样器
+// 嵌在 TransactionController / GenericController 这类纯分组容器内，
+// 就被判成「没有启用的 HTTP 采样器」而整份拒绝 —— 占全部语料的四分之一
+func TestImportNestedSamplers(t *testing.T) {
+	cfg, rep, err := LoadJMeterPlan("testdata/nested.jmx", true)
+	require.NoError(t, err, "报告:\n%s", rep)
+	require.Len(t, cfg.APIs, 3, "事务控制器与简单控制器里的采样器都要被找到")
+
+	assert.Equal(t, []string{"搜索", "详情", "裸主机"},
+		[]string{cfg.APIs[0].Name, cfg.APIs[1].Name, cfg.APIs[2].Name},
+		"展开后仍按脚本顺序")
+	assert.Contains(t, rep.String(), "纯分组容器", "报告要说明容器是怎么处理的")
+}
+
+// TestImportPlanLevelHeaders 测试计划层的请求头要下发给每个采样器
+//
+// JMeter 里挂在 TestPlan 下的 HeaderManager 对计划内所有采样器生效。
+// 此前这些头只存进 cfg.Headers 就不管了，而把它合并进各 api 的
+// mergeAPIsWithCommon 只在配置文件加载器里调用 —— -jmx 这条路径不走它
+//
+// 后果：脚本里写了 Authorization，压出来每个请求都 401，
+// 而报告里只说「全局请求头 1 条 → headers」，看不出任何异常
+func TestImportPlanLevelHeaders(t *testing.T) {
+	cfg, rep, err := LoadJMeterPlan("testdata/nested.jmx", true)
+	require.NoError(t, err, "报告:\n%s", rep)
+	require.Len(t, cfg.APIs, 3)
+
+	for i, api := range cfg.APIs {
+		assert.Equal(t, "Bearer plan-level-token", api.Headers["Authorization"],
+			"第 %d 个请求（%s）没拿到计划层的认证头", i, api.Name)
+	}
+	// 采样器自己的头不受影响
+	assert.Equal(t, "application/json", cfg.APIs[0].Headers["Content-Type"])
+	assert.NotContains(t, cfg.APIs[1].Headers, "Content-Type",
+		"采样器自己的头不该漏给别的请求")
+}
+
+// TestRoundTripPreservesCRLF 请求体里的回车必须活着走完往返
+//
+// XML 规范要求解析器把字面的 \r\n 与 \r 一律归一成 \n，所以导出时原样写出的
+// 回车在再次解析时会静默消失。语料里 84 份脚本的请求体因此变短过 ——
+// CRLF 的报文过一遍转换就成了 LF，Content-Length 随之改变
+func TestRoundTripPreservesCRLF(t *testing.T) {
+	cfg, _, err := LoadJMeterPlan("testdata/nested.jmx", true)
+	require.NoError(t, err)
+	require.NotEmpty(t, cfg.APIs)
+
+	body := cfg.APIs[0].Body
+	require.Contains(t, body, "\r\n", "fixture 本身应含 CRLF，否则这个用例测不到东西")
+
+	data, _, err := ExportJMeterPlan(cfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "&#xd;", "回车必须转义成实体才能活过 XML 解析")
+
+	path := filepath.Join(t.TempDir(), "crlf.jmx")
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+	back, _, err := LoadJMeterPlan(path, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, back.APIs)
+
+	assert.Equal(t, body, back.APIs[0].Body, "请求体应逐字节还原")
+}
+
+// TestRoundTripPathNotReEncoded 路径不得被重新做百分号编码
+//
+// 走 url.Parse 再取 EscapedPath 会把 {{.id}} 编码成 %7B%7B.id%7D%7D，
+// JMeter 拿到的就是一个字面的编码串而非变量引用，请求直接打到错误的路径上。
+// 语料里 27 份地址因此被改写，另有 1 份的中文路径被整段编码
+func TestRoundTripPathNotReEncoded(t *testing.T) {
+	cases := []string{
+		"https://api.example.com/v1/items/{{.itemId}}",
+		"http://127.0.0.1:5000/中文路径",
+		"https://api.example.com/a%20b/c",       // 已编码的要保持编码
+		"https://api.example.com/q?s={{.term}}", // 查询串里的变量
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			cfg := baseCfg()
+			cfg.CSVData = nil
+			cfg.APIs = []APIConfig{{Name: "x", URL: raw, Method: "GET"}}
+
+			data, _, err := ExportJMeterPlan(cfg)
+			require.NoError(t, err)
+			assert.NotContains(t, string(data), "%7B", "模板变量不得被编码")
+
+			back, _, _ := roundTrip(t, cfg)
+			require.Len(t, back.APIs, 1)
+			assert.Equal(t, raw, back.APIs[0].URL, "地址应逐字还原")
+		})
+	}
+}
+
+// TestRoundTripBareHostNoTrailingSlash 裸主机地址不该被补上斜杠
+//
+// 语料里 12 份地址因此多了一个尾随斜杠。虽然多数服务等价看待，
+// 但转换不该擅自改写使用者写下的地址
+func TestRoundTripBareHostNoTrailingSlash(t *testing.T) {
+	cfg, _, err := LoadJMeterPlan("testdata/nested.jmx", true)
+	require.NoError(t, err)
+	require.Len(t, cfg.APIs, 3)
+	require.Equal(t, "http://example.com", cfg.APIs[2].URL, "导入时就不该补斜杠")
+
+	data, _, err := ExportJMeterPlan(cfg)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "bare.jmx")
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+
+	back, _, err := LoadJMeterPlan(path, true)
+	require.NoError(t, err)
+	require.Len(t, back.APIs, 3)
+	assert.Equal(t, "http://example.com", back.APIs[2].URL, "往返后也不该补斜杠")
+}
+
+// TestImportRejectionNamesTheRealCause 采样器被会改变负载的容器挡住时，
+// 错误信息要指出是哪些容器
+//
+// 语料里 64 份脚本的采样器嵌在 If/Loop/OnceOnly 这类控制器内。原先一律回
+// 「没有启用的 HTTP 采样器」—— 字面没错，但使用者会以为文件损坏或版本不兼容，
+// 而真正该看的是那些控制器
+func TestImportRejectionNamesTheRealCause(t *testing.T) {
+	jmx := `<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="p" enabled="true"/>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="g" enabled="true">
+        <stringProp name="ThreadGroup.num_threads">2</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">3</stringProp>
+        </elementProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+      </ThreadGroup>
+      <hashTree>
+        <IfController guiclass="IfControllerPanel" testclass="IfController" testname="仅当有货" enabled="true">
+          <stringProp name="IfController.condition">${__jexl3(true)}</stringProp>
+        </IfController>
+        <hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="s" enabled="true">
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments"/>
+            </elementProp>
+            <stringProp name="HTTPSampler.domain">h</stringProp>
+            <stringProp name="HTTPSampler.protocol">http</stringProp>
+            <stringProp name="HTTPSampler.path">/p</stringProp>
+            <stringProp name="HTTPSampler.method">GET</stringProp>
+          </HTTPSamplerProxy>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>`
+
+	path := filepath.Join(t.TempDir(), "guarded.jmx")
+	require.NoError(t, os.WriteFile(path, []byte(jmx), 0o644))
+
+	_, _, err := LoadJMeterPlan(path, true)
+	require.Error(t, err, "条件控制器会决定请求是否发出，不该摊平导入")
+	assert.Contains(t, err.Error(), "IfController", "要指名是哪个容器挡住了")
+	assert.NotContains(t, err.Error(), "没有启用的 HTTP 采样器",
+		"脚本里明明有采样器，这句话会把人引到错误的方向")
+}
+
+// TestRoundTripNestedConverges 嵌套结构的往返同样收敛
+func TestRoundTripNestedConverges(t *testing.T) {
+	cfg, _, err := LoadJMeterPlan("testdata/nested.jmx", true)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	cycle := func(c *Config, name string) (*Config, []byte) {
+		data, _, err := ExportJMeterPlan(c)
+		require.NoError(t, err)
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(p, data, 0o644))
+		back, rep, err := LoadJMeterPlan(p, true)
+		require.NoError(t, err)
+		require.False(t, rep.HasFatal(), "重新导入出现致命丢弃:\n%s", rep.String())
+		return back, data
+	}
+
+	c1, _ := cycle(cfg, "n1.jmx")
+	c2, d2 := cycle(c1, "n2.jmx")
+	_, d3 := cycle(c2, "n3.jmx")
+	assert.Equal(t, string(d2), string(d3), "第二轮与第三轮导出应完全一致")
+}

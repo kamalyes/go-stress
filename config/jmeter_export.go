@@ -13,7 +13,6 @@ package config
 import (
 	"bytes"
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -785,8 +784,17 @@ func toJMeterVars(s string) string {
 
 // splitURLForJMX 把地址拆成 JMeter 采样器需要的四个字段
 //
-// 解析失败时退回「全部塞进 path」：导入侧的 samplerURL 认得 path 本身就是
-// 完整 URL 的写法，所以这条退路仍能还原出同一个地址
+// 按字符串切分而不走 url.Parse 再取 EscapedPath：后者会把路径重新做一遍
+// 百分号编码，而 go-stress 的地址里常含模板变量 ——
+// /objects/{{.id}} 会变成 /objects/%7B%7B.id%7D%7D，JMeter 拿到的就是一个
+// 字面的编码串而非变量引用，请求直接打到错误的路径上。345 份真实脚本的
+// 语料里，27 份的地址因此被改写过，另有 1 份的中文路径被整段编码
+//
+// 逐字切分则路径原样保留：已经编码的 %20 保持编码，未编码的变量保持原样，
+// 两者都不被改动
+//
+// 解析不出主机时退回「全部塞进 path」：导入侧的 samplerURL 认得 path 本身
+// 就是完整 URL 的写法，这条退路仍能还原出同一个地址
 func splitURLForJMX(rawURL, hostField, pathField string) (scheme, host, port, path string) {
 	if rawURL == "" && hostField != "" {
 		rawURL = strings.TrimRight(hostField, "/") + pathField
@@ -795,25 +803,57 @@ func splitURLForJMX(rawURL, hostField, pathField string) (scheme, host, port, pa
 		return "", "", "", pathField
 	}
 
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
+	rest := rawURL
+	if i := strings.Index(rest, "://"); i >= 0 {
+		scheme = strings.ToLower(rest[:i])
+		rest = rest[i+3:]
+	}
+	if scheme != "http" && scheme != "https" {
+		// 不是 HTTP 地址就不拆，整串交给 path
 		return "", "", "", rawURL
 	}
 
-	scheme = u.Scheme
-	if scheme == "" {
-		scheme = "http"
+	// 主机部分截止于首个 / ? 或 #
+	authority := rest
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority, path = rest[:i], rest[i:]
 	}
-	host = u.Hostname()
-	port = u.Port()
-	path = u.EscapedPath()
-	if path == "" {
-		path = "/"
+	if authority == "" {
+		return "", "", "", rawURL
 	}
-	if u.RawQuery != "" {
-		path += "?" + u.RawQuery
+
+	// 去掉 user:pass@：JMeter 的采样器没有这两个字段
+	if i := strings.LastIndex(authority, "@"); i >= 0 {
+		authority = authority[i+1:]
+	}
+
+	host, port = splitHostPort(authority)
+	if host == "" {
+		return "", "", "", rawURL
 	}
 	return scheme, host, port, path
+}
+
+// splitHostPort 拆主机与端口，兼顾 IPv6 的方括号写法
+func splitHostPort(authority string) (host, port string) {
+	if strings.HasPrefix(authority, "[") {
+		// IPv6：[::1]:8080
+		if end := strings.Index(authority, "]"); end >= 0 {
+			host = authority[:end+1]
+			if rest := authority[end+1:]; strings.HasPrefix(rest, ":") {
+				port = rest[1:]
+			}
+			return host, port
+		}
+		return authority, ""
+	}
+	if i := strings.LastIndex(authority, ":"); i >= 0 {
+		// 冒号后必须全是数字才算端口，否则整串都是主机
+		if p := authority[i+1:]; p != "" && isPlainInt(p) {
+			return authority[:i], p
+		}
+	}
+	return authority, ""
 }
 
 // expectString 把期望值统一成字符串
@@ -942,8 +982,13 @@ func (w *jmxWriter) closeNested(tag string) {
 //
 // 自己写而非用 xml.EscapeText：后者会把换行转成 &#xA;，而 .jmx 里的
 // 请求体经常是多行 JSON，转义后在 JMeter 的编辑框里会糊成一行
+//
+// 但回车必须转义成 &#xD;。XML 规范要求解析器把字面的 \r\n 与 \r 一律归一成
+// \n，所以原样写出去的回车在再次解析时会静默消失 —— CRLF 的请求体过一遍
+// 导出再导入就变成了 LF，报文长度随之改变。345 份真实脚本的语料里，
+// 84 份的请求体因此变短过
 func escapeXML(s string) string {
-	if !strings.ContainsAny(s, `&<>"'`) {
+	if !strings.ContainsAny(s, "&<>\"'\r") {
 		return s
 	}
 	var b strings.Builder
@@ -960,6 +1005,8 @@ func escapeXML(s string) string {
 			b.WriteString("&quot;")
 		case '\'':
 			b.WriteString("&apos;")
+		case '\r':
+			b.WriteString("&#xd;") // 小写与 JMeter 自己的输出一致，便于比对
 		default:
 			b.WriteRune(r)
 		}
