@@ -168,6 +168,30 @@ go-stress -config testserver/websocket-quick.yaml -no-wait
 | **Go** | 1.26+ | 仅源码安装需要；预编译二进制无任何依赖 |
 | **CGO** | 仅 `-storage sqlite` 需要 | `memory` 与 `badger` 是纯 Go 实现，`CGO_ENABLED=0` 下可用 |
 
+**一键脚本的可选参数**
+
+```bash
+# 装指定版本
+curl -fsSL .../install.sh | VERSION=v1.0.1 sh
+
+# 装到指定目录（默认 /usr/local/bin，不可写时回落 ~/.local/bin）
+curl -fsSL .../install.sh | INSTALL_DIR=~/bin sh
+```
+
+脚本会按 `uname` 选择对应产物，校验下载内容确实是二进制后才安装，失败时给出具体原因（HTTP 404 / 网络不通 / 目录不可写），不会静默装上一个跑不起来的文件
+
+**go install**
+
+```bash
+go install github.com/kamalyes/go-stress@latest
+```
+
+`@latest` 只认 semver 标签，发版后若遇 `unknown revision`，是公共代理缓存了旧的版本列表，指定确切版本或直连即可：
+
+```bash
+GOPROXY=direct go install github.com/kamalyes/go-stress@v1.0.1
+```
+
 **源码构建**
 
 ```bash

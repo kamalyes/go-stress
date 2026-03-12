@@ -153,7 +153,23 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           OUT=dist/go-stress-${{ matrix.goos }}-${{ matrix.goarch }}$EXT
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -v -trimpath -ldflags="-s -w" -o "$OUT" main.go
+
+          # 把版本号注入二进制
+          #
+          # 必须显式注入：-trimpath 加上编译单个 main.go（而非包路径）会关掉 VCS
+          # 戳记，于是 debug.ReadBuildInfo 读不到模块版本，buildVersion 只能回落成
+          # "devel" —— 发布出去的每个二进制都报 devel，使用者无从判断自己装的是哪一版
+          VERSION="${{ github.event.inputs.release-tag || github.ref_name }}"
+          case "$VERSION" in
+            v*) ;;
+            *) VERSION="dev-${GITHUB_SHA:0:12}" ;;
+          esac
+          echo "注入版本号: $VERSION"
+
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -v -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION" \
+              -o "$OUT" main.go
 
       - name: ♻️ UPX Cache
         id: upx-cache
