@@ -213,6 +213,24 @@ type AdvancedConfig struct {
 	// 取反向命名，使配置省略时即为"启用"：trace 头是定位问题的主要线索，默认该开
 	// 需要逐字节复现原始请求（如签名校验把全部头纳入计算）时才关掉
 	DisableTraceHeader bool `json:"disable_trace_header,omitempty" yaml:"disable_trace_header,omitempty"`
+
+	// RequestIDHeader 随请求一并带上的请求 ID 头名，留空取默认的 X-Request-Id
+	//
+	// traceparent 只有接了链路中间件的服务才认；而网关、Nginx、各家框架的
+	// 访问日志几乎都会原样记录 X-Request-Id 这类头，两个一起带上，
+	// 对端无论是哪种形态都能把日志和这里的某一次请求对上
+	//
+	// 填 "-" 表示不带
+	RequestIDHeader string `json:"request_id_header,omitempty" yaml:"request_id_header,omitempty"`
+
+	// TraceCaptureHeaders 从响应头里回捞的追踪字段，按序命中第一个为准
+	//
+	// 很多服务自己生成链路 ID 再从响应头回带（x-trace-id、x-request-id、
+	// x-amzn-trace-id 等）。捞回来存进结果，报告里一眼就能拿着服务端自己的
+	// ID 去对方日志系统里查，不必再靠时间戳猜
+	//
+	// 匹配不区分大小写；留空取内置默认列表，填 "-" 表示不捞
+	TraceCaptureHeaders []string `json:"trace_capture_headers,omitempty" yaml:"trace_capture_headers,omitempty"`
 }
 
 // VerifyConfig 验证配置

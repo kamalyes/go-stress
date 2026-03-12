@@ -63,6 +63,8 @@ type Worker struct {
 	// trace 本 Worker 专属的 trace 标识生成器（无锁，详见 traceGen）
 	trace             *traceGen
 	injectTraceHeader bool
+	requestIDHeader   string        // 主动带上的请求 ID 头名，空串表示不带
+	capture           *traceCapture // 从响应头回捞服务端追踪 ID（全部 Worker 共享，只读）
 
 	// think 思考时间的等待器；thinkTime 为全局默认，可被 APIConfig.ThinkTime 覆盖
 	think     *thinkTimer
@@ -97,7 +99,9 @@ type WorkerConfig struct {
 	Controller  Controller  // 控制器（可选）
 	Logger      logger.ILogger
 
-	InjectTraceHeader bool // 是否向请求注入 traceparent 头
+	InjectTraceHeader bool          // 是否向请求注入 traceparent 头
+	RequestIDHeader   string        // 请求 ID 头名，空串表示不带
+	TraceCapture      *traceCapture // 响应头追踪 ID 回捞器（可选）
 
 	ThinkTime *config.ThinkTimeConfig // 全局思考时间（可选）
 	CSVSource *CSVSource              // CSV 数据源（可选，全部 Worker 共享）
@@ -109,6 +113,13 @@ func NewWorker(cfg WorkerConfig, varResolver *config.VariableResolver) *Worker {
 	ctrl := cfg.Controller
 	if ctrl == nil {
 		ctrl = &NoOpController{}
+	}
+
+	// 回捞器由调度器统一构造并共享；单独构造 Worker 时（测试、嵌入式调用）
+	// 兜底成默认列表，而不是留个 nil 指针等着解引用
+	capture := cfg.TraceCapture
+	if capture == nil {
+		capture = newTraceCapture(nil)
 	}
 
 	return &Worker{
@@ -125,6 +136,8 @@ func NewWorker(cfg WorkerConfig, varResolver *config.VariableResolver) *Worker {
 
 		trace:             newTraceGen(),
 		injectTraceHeader: cfg.InjectTraceHeader,
+		requestIDHeader:   cfg.RequestIDHeader,
+		capture:           capture,
 
 		think:     newThinkTimer(),
 		thinkTime: cfg.ThinkTime.Normalize(),
@@ -298,9 +311,14 @@ func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource
 		// Headers 来自 ReplaceHeaders 的新 map，就地写入不会污染原始配置；
 		// 但配置未声明任何头时它是 nil，需先建出来
 		if req.Headers == nil {
-			req.Headers = make(map[string]string, 1)
+			req.Headers = make(map[string]string, 2)
 		}
 		req.Headers[HeaderTraceparent] = traceparent
+		// 请求 ID 头取同一个 trace-id：对端无论记的是哪个头，回头都能
+		// 用同一个值在本工具的报告里反查到这一次请求
+		if w.requestIDHeader != "" {
+			req.Headers[w.requestIDHeader] = traceID
+		}
 	}
 
 	// 定速压测：等到本请求被允许发出为止
@@ -338,6 +356,11 @@ func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource
 	result.APIName = apiCfg.Name
 	result.GroupID = groupID
 	result.TraceID = traceID
+	// 回捞服务端自己的追踪 ID：对端没接 W3C 链路、只回带自建 ID 时，
+	// 这是唯一能把一次失败请求定位到对方日志的线索
+	if resp != nil && w.capture.enabled() {
+		result.ServerTraceHeader, result.ServerTraceID = w.capture.find(resp.Headers)
+	}
 	w.collector.Collect(result)
 }
 

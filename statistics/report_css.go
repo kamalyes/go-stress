@@ -732,4 +732,414 @@ tbody tr:last-child {
         flex-direction: column;
     }
 }
+/* ==================== API 汇总：Swagger 风格折叠项 ==================== */
+/* 平表 11 列在窄屏上必须横向滚动，而真正要看的是「哪个接口慢、哪个在报错」
+   折叠项把方法与路径提到行首、关键指标压缩进同一行，明细按需展开 */
+
+.api-hint {
+    font-size: 12px;
+    font-weight: 400;
+    color: #6c757d;
+    margin-left: 12px;
+}
+
+.api-toolbar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.api-filter {
+    flex: 1 1 280px;
+    min-width: 200px;
+    padding: 9px 14px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    font-size: 13px;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+}
+
+.api-filter:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, .12);
+}
+
+.api-toolbar-actions { display: flex; gap: 8px; }
+
+.api-btn {
+    padding: 8px 14px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: #fff;
+    color: #495057;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+}
+
+.api-btn:hover { background: #f8f9fa; border-color: #adb5bd; }
+
+.api-list { display: flex; flex-direction: column; gap: 8px; }
+
+.api-empty {
+    padding: 28px;
+    text-align: center;
+    color: #6c757d;
+    font-size: 13px;
+}
+
+.api-item {
+    border: 1px solid #e9ecef;
+    border-left-width: 4px;
+    border-radius: 6px;
+    background: #fff;
+    overflow: hidden;
+    transition: box-shadow .15s;
+}
+
+.api-item:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, .06); }
+.api-item.is-open { box-shadow: 0 2px 14px rgba(0, 0, 0, .08); }
+
+/* 左侧色条按方法着色，扫一眼即知读写性质 */
+.api-item[data-method="GET"]     { border-left-color: #61affe; }
+.api-item[data-method="POST"]    { border-left-color: #49cc90; }
+.api-item[data-method="PUT"]     { border-left-color: #fca130; }
+.api-item[data-method="PATCH"]   { border-left-color: #50e3c2; }
+.api-item[data-method="DELETE"]  { border-left-color: #f93e3e; }
+.api-item[data-method="HEAD"]    { border-left-color: #9012fe; }
+.api-item[data-method="OPTIONS"] { border-left-color: #0d5aa7; }
+
+/* 该接口有失败时整项提示，不必展开也看得见 */
+.api-item.has-failure { background: #fffafa; }
+
+.api-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 16px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    font-family: inherit;
+}
+
+.api-method {
+    flex: 0 0 auto;
+    min-width: 62px;
+    padding: 5px 0;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .4px;
+    text-align: center;
+    background: #6c757d;
+}
+
+.api-item[data-method="GET"]     .api-method { background: #61affe; }
+.api-item[data-method="POST"]    .api-method { background: #49cc90; }
+.api-item[data-method="PUT"]     .api-method { background: #fca130; }
+.api-item[data-method="PATCH"]   .api-method { background: #50e3c2; }
+.api-item[data-method="DELETE"]  .api-method { background: #f93e3e; }
+.api-item[data-method="HEAD"]    .api-method { background: #9012fe; }
+.api-item[data-method="OPTIONS"] .api-method { background: #0d5aa7; }
+
+.api-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    color: #3b4151;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.api-name {
+    flex: 0 0 auto;
+    max-width: 30%;
+    font-size: 12px;
+    color: #6c757d;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.api-chips {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.api-chip {
+    padding: 3px 9px;
+    border-radius: 11px;
+    background: #f1f3f5;
+    color: #495057;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.api-chip.ok   { background: #e7f7ee; color: #1a7f45; }
+.api-chip.warn { background: #fff4e5; color: #975a16; }
+.api-chip.bad  { background: #fdecec; color: #b42318; }
+
+.api-caret {
+    flex: 0 0 auto;
+    color: #adb5bd;
+    font-size: 11px;
+    transition: transform .18s;
+}
+
+.api-item.is-open .api-caret { transform: rotate(90deg); }
+
+.api-body {
+    display: none;
+    padding: 4px 16px 18px;
+    border-top: 1px solid #f1f3f5;
+}
+
+.api-item.is-open .api-body { display: block; }
+
+.api-url {
+    margin: 14px 0 16px;
+    padding: 10px 12px;
+    border-radius: 5px;
+    background: #f8f9fa;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #495057;
+    word-break: break-all;
+}
+
+/* 固定列数而非 auto-fit：指标共 12 项，列数必须能整除它，
+   否则末行会剩下一两个孤格 —— auto-fit 在宽屏上排 10 列，
+   P99 就被单独甩到第二行 */
+.api-metrics {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+@media (max-width: 1100px) {
+    .api-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@media (max-width: 820px) {
+    .api-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.api-metric {
+    padding: 10px 12px;
+    border-radius: 5px;
+    background: #f8f9fa;
+}
+
+.api-metric-label { font-size: 11px; color: #6c757d; margin-bottom: 4px; }
+.api-metric-value { font-size: 15px; font-weight: 600; color: #3b4151; }
+.api-metric-value.ok   { color: #1a7f45; }
+.api-metric-value.warn { color: #975a16; }
+.api-metric-value.bad  { color: #b42318; }
+
+.api-sub-title {
+    margin: 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.api-block { margin-bottom: 16px; }
+.api-block:last-child { margin-bottom: 0; }
+
+.api-codes { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.api-code {
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: #f1f3f5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #495057;
+}
+
+.api-code.c2xx { background: #e7f7ee; color: #1a7f45; }
+.api-code.c3xx { background: #e8f1fd; color: #1456a0; }
+.api-code.c4xx { background: #fff4e5; color: #975a16; }
+.api-code.c5xx { background: #fdecec; color: #b42318; }
+
+/* 状态码是下钻入口，按钮需要复位默认样式并给出可点的观感 */
+button.api-code {
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    transition: border-color .15s, box-shadow .15s;
+}
+
+button.api-code:hover { border-color: currentColor; }
+button.api-code.is-active {
+    border-color: currentColor;
+    box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.api-sub-hint {
+    margin-left: 8px;
+    font-weight: 400;
+    font-size: 11px;
+    color: #adb5bd;
+}
+
+.api-errors { display: flex; flex-direction: column; gap: 6px; }
+
+.api-error {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-left: 3px solid #f93e3e;
+    border-radius: 0 4px 4px 0;
+    background: #fdecec;
+    font-family: inherit;
+    font-size: 12px;
+    color: #842029;
+    text-align: left;
+    cursor: pointer;
+}
+
+.api-error:hover { background: #fbdcdc; }
+.api-error.is-active { box-shadow: inset 0 0 0 1px #f93e3e; }
+
+.api-error-count {
+    flex: 0 0 auto;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.api-error-msg { word-break: break-word; }
+
+/* ---- 下钻面板：从某个状态码 / 某类错误落到真实请求 ---- */
+
+.api-drill {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid #e3e8ef;
+    border-radius: 6px;
+    background: #fbfcfe;
+}
+
+.api-drill-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.api-drill-more {
+    font-weight: 400;
+    color: #6c757d;
+}
+
+.api-drill-close { margin-left: auto; }
+
+.api-drill-empty {
+    padding: 10px 0;
+    font-size: 12px;
+    color: #6c757d;
+}
+
+.api-samples { display: flex; flex-direction: column; gap: 6px; }
+
+.api-sample {
+    border: 1px solid #e9ecef;
+    border-radius: 5px;
+    background: #fff;
+    overflow: hidden;
+}
+
+.api-sample-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.api-sample-head:hover { background: #f8f9fa; }
+
+.api-sample-idx {
+    flex: 0 0 auto;
+    min-width: 28px;
+    color: #adb5bd;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.api-sample-time,
+.api-sample-dur,
+.api-sample-trace {
+    flex: 0 0 auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #495057;
+}
+
+.api-sample-trace {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #868e96;
+}
+
+/* 服务端回带的 ID 着重标出：它才是能直接去对方日志里查的那个 */
+.api-sample-trace.is-server {
+    color: #1456a0;
+    font-weight: 600;
+}
+
+.api-sample-reason {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #b42318;
+}
+
+.api-sample-body { display: none; }
+
+.api-sample.is-open .api-sample-body {
+    display: block;
+    padding: 12px;
+    border-top: 1px solid #f1f3f5;
+    background: #fdfdfe;
+}
+
+.api-sample.is-open .api-caret { transform: rotate(90deg); }
+
+@media (max-width: 768px) {
+    .api-head { flex-wrap: wrap; gap: 8px; }
+    .api-name { max-width: 100%; }
+    .api-path { flex-basis: 100%; white-space: normal; }
+    .api-chips { flex-wrap: wrap; }
+    .api-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .api-sample-head { flex-wrap: wrap; }
+    .api-sample-reason { flex-basis: 100%; white-space: normal; }
+    .api-sample-trace { max-width: 100%; }
+}
 `

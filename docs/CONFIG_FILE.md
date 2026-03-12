@@ -140,7 +140,11 @@ advanced:
   disable_realtime: false    # 关闭实时报告服务器，默认 false
 
   # 链路追踪
-  disable_trace_header: false # 不注入 traceparent 请求头，默认 false
+  disable_trace_header: false     # 不注入 traceparent 与 X-Request-Id，默认 false
+  request_id_header: X-Request-Id # 请求 ID 头名，留空取默认，填 "-" 表示不带
+  trace_capture_headers:          # 从响应头回捞追踪 ID 的字段，顺序即优先级
+    - X-Trace-Id                  # 留空取内置默认列表，填 ["-"] 表示不捞
+    - X-Request-Id
 ```
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -155,7 +159,9 @@ advanced:
 | `target_qps` | float64 | `0` | 目标速率，见 [负载形态](LOAD_PROFILE.md) |
 | `realtime_port` | int | `8088` | 实时报告服务器端口 |
 | `disable_realtime` | bool | `false` | 关闭实时报告服务器，CI 场景不需要它占端口 |
-| `disable_trace_header` | bool | `false` | 不注入 `traceparent`，见 [链路追踪](TRACING.md) |
+| `disable_trace_header` | bool | `false` | 不注入 `traceparent` 与 `X-Request-Id`，见 [链路追踪](TRACING.md) |
+| `request_id_header` | string | `X-Request-Id` | 请求 ID 头名，填 `-` 表示不带 |
+| `trace_capture_headers` | []string | 见 [链路追踪](TRACING.md) | 从响应头回捞追踪 ID 的字段，不区分大小写，顺序即优先级，填 `["-"]` 表示不捞 |
 
 > 字段名是 `max_retries` 不是 `max_retry` — 配置文件开启了未知字段检查，写错会在启动时直接报错
 

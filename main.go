@@ -17,6 +17,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kamalyes/go-stress/bootstrap"
@@ -89,7 +90,9 @@ var (
 	noWait       bool              // 压测结束即退出
 
 	// 链路追踪
-	noTraceHeader bool // 不注入 traceparent 请求头
+	noTraceHeader   bool   // 不注入 traceparent 请求头
+	requestIDHeader string // 随请求带上的请求 ID 头名
+	traceCapture    string // 从响应头回捞追踪 ID 的字段（逗号分隔）
 
 	// 定速压测
 	targetQPS float64 // 目标速率（每秒请求数），0 表示不限速
@@ -179,6 +182,8 @@ func init() {
 	flag.BoolVar(&noPrint, "no-print", false, "不在终端打印报告表格")
 	flag.BoolVar(&noWait, "no-wait", false, "压测结束即退出，不驻留实时报告服务器（CI/脚本场景）")
 	flag.BoolVar(&noTraceHeader, "no-trace-header", false, "不注入 traceparent 请求头（默认注入，便于与被压服务的链路对齐）")
+	flag.StringVar(&requestIDHeader, "request-id-header", "", "随请求带上的请求 ID 头名（默认 X-Request-Id，填 - 表示不带）")
+	flag.StringVar(&traceCapture, "trace-capture", "", "从响应头回捞追踪 ID 的字段，逗号分隔，不区分大小写（默认 x-trace-id,x-request-id 等，填 - 表示不捞）")
 
 	// 内存限制
 	flag.StringVar(&maxMemory, "max-memory", "", "内存使用阈值，超过后自动停止测试 (如: 1GB, 512MB, 2048KB)")
@@ -301,6 +306,10 @@ func buildConfigFromFlags() *config.Config {
 	}
 	cfg.Advanced.DisableTraceHeader = noTraceHeader
 	cfg.Advanced.TargetQPS = targetQPS
+	cfg.Advanced.RequestIDHeader = requestIDHeader
+	if traceCapture != "" {
+		cfg.Advanced.TraceCaptureHeaders = splitList(traceCapture)
+	}
 
 	// 解析Headers
 	cfg.Headers = make(map[string]string)
@@ -1000,4 +1009,16 @@ func runStandaloneMode() {
 	if err := bootstrap.RunStandalone(opts); err != nil {
 		logger.Default.Fatalf("❌ 运行 Standalone 失败: %v", err)
 	}
+}
+
+// splitList 拆分逗号分隔的命令行取值，去空白并丢弃空项
+func splitList(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

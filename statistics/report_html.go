@@ -163,27 +163,17 @@ const reportHTML = `<!DOCTYPE html>
             <div class="section" id="apiSection" style="display: none;">
                 <div class="section-title">
                     <span>🧩 API 汇总</span>
+                    <span class="api-hint">点击任意接口展开明细</span>
                 </div>
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>API 名称</th>
-                                <th>请求数</th>
-                                <th>成功</th>
-                                <th>失败</th>
-                                <th>跳过</th>
-                                <th>成功率</th>
-                                <th>平均</th>
-                                <th>P50</th>
-                                <th>P95</th>
-                                <th>P99</th>
-                                <th>QPS</th>
-                            </tr>
-                        </thead>
-                        <tbody id="api-tbody"></tbody>
-                    </table>
+                <div class="api-toolbar">
+                    <input type="text" id="apiFilter" class="api-filter" placeholder="按名称、方法或路径筛选接口">
+                    <div class="api-toolbar-actions">
+                        <button type="button" class="api-btn" id="apiExpandAll">全部展开</button>
+                        <button type="button" class="api-btn" id="apiCollapseAll">全部收起</button>
+                    </div>
                 </div>
+                <div class="api-list" id="api-list"></div>
+                <div class="api-empty" id="apiEmpty" style="display: none;">没有匹配的接口</div>
             </div>
 
             <div class="section">

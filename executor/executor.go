@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/kamalyes/go-logger"
@@ -149,17 +150,19 @@ func NewExecutor(cfg *config.Config, storageMode StorageMode, storagePath string
 
 	// 直接从 config 取变量解析器
 	e.scheduler = NewScheduler(SchedulerConfig{
-		WorkerCount:       e.config.Concurrency,
-		RequestPerWorker:  e.config.Requests,
-		RampUpDuration:    rampUp,
-		ClientPool:        e.pool,
-		Handler:           handler,
-		Collector:         e.collector,
-		APISelector:       apiSelector,
-		VarResolver:       e.config.VarResolver,
-		Controller:        nil, // 稍后设置
-		Logger:            e.logger,
-		InjectTraceHeader: e.config.Advanced == nil || !e.config.Advanced.DisableTraceHeader,
+		WorkerCount:         e.config.Concurrency,
+		RequestPerWorker:    e.config.Requests,
+		RampUpDuration:      rampUp,
+		ClientPool:          e.pool,
+		Handler:             handler,
+		Collector:           e.collector,
+		APISelector:         apiSelector,
+		VarResolver:         e.config.VarResolver,
+		Controller:          nil, // 稍后设置
+		Logger:              e.logger,
+		InjectTraceHeader:   e.config.Advanced == nil || !e.config.Advanced.DisableTraceHeader,
+		RequestIDHeader:     requestIDHeader(e.config.Advanced),
+		TraceCaptureHeaders: traceCaptureHeaders(e.config.Advanced),
 
 		ThinkTime: e.config.ThinkTime,
 		CSVSource: csvSource,
@@ -411,4 +414,30 @@ func (e *Executor) openBrowser(url string) {
 	if err != nil {
 		e.logger.Debugf("自动打开浏览器失败: %v", err)
 	}
+}
+
+// requestIDHeader 取请求 ID 头名
+//
+// 配置省略时给默认的 X-Request-Id，填 "-" 表示不带。与 DisableTraceHeader
+// 取同一个开关：关掉 trace 头的场景（逐字节复现原始请求）同样不该多带这个
+func requestIDHeader(adv *config.AdvancedConfig) string {
+	if adv == nil {
+		return HeaderRequestID
+	}
+	switch strings.TrimSpace(adv.RequestIDHeader) {
+	case "":
+		return HeaderRequestID
+	case DisableMarker:
+		return ""
+	default:
+		return strings.TrimSpace(adv.RequestIDHeader)
+	}
+}
+
+// traceCaptureHeaders 取从响应头回捞的字段列表，nil 表示用内置默认列表
+func traceCaptureHeaders(adv *config.AdvancedConfig) []string {
+	if adv == nil {
+		return nil
+	}
+	return adv.TraceCaptureHeaders
 }

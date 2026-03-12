@@ -21,7 +21,21 @@ import (
 
 // APIStat 单个 API 的聚合统计（JSON 中耗时一律为毫秒，与 Report 其他字段口径一致）
 type APIStat struct {
-	Name        string  `json:"name"`         // API 名称
+	Name string `json:"name"` // API 名称
+
+	// Method/URL 取该 API 首次请求的取值，用于报告里按 Swagger 风格展示
+	// 「方法 + 路径」这一行
+	//
+	// 只取首次而非逐次收集：URL 里常含变量（{{.username}} 等），逐次收集会得到
+	// 成千上万条互不相同的地址，对阅读毫无帮助
+	Method string `json:"method,omitempty"` // 请求方法
+	URL    string `json:"url,omitempty"`    // 请求地址（首次取样）
+
+	// StatusCodes 状态码分布，展开后用于看清失败集中在哪个码
+	StatusCodes map[int]uint64 `json:"status_codes,omitempty"`
+	// Errors 错误归类，键为错误文本
+	Errors map[string]uint64 `json:"errors,omitempty"`
+
 	Requests    uint64  `json:"requests"`     // 总请求数
 	Success     uint64  `json:"success"`      // 成功数
 	Failed      uint64  `json:"failed"`       // 失败数
@@ -37,7 +51,17 @@ type APIStat struct {
 }
 
 // apiAgg 单个 API 的原子聚合器
+type apiMeta struct {
+	method string
+	url    string
+}
+
 type apiAgg struct {
+	// meta 首次请求的方法与地址，以 CAS 只写一次，热路径上后续请求零成本
+	meta       atomic.Pointer[apiMeta]
+	statusCode *syncx.Map[int, uint64]
+	errors     *syncx.Map[string, uint64]
+
 	requests   atomic.Uint64
 	success    atomic.Uint64
 	failed     atomic.Uint64
@@ -65,9 +89,26 @@ func newAPIAggregator() *apiAggregator {
 func (a *apiAggregator) record(name string, result *RequestResult) {
 	agg, ok := a.apis.Load(name)
 	if !ok {
-		newAgg := &apiAgg{latency: NewLatencyHistogram()}
+		newAgg := &apiAgg{
+			latency:    NewLatencyHistogram(),
+			statusCode: syncx.NewMap[int, uint64](),
+			errors:     syncx.NewMap[string, uint64](),
+		}
 		newAgg.minNanos.Store(math.MaxInt64)
 		agg, _ = a.apis.LoadOrStore(name, newAgg)
+	}
+
+	// 首次请求记下方法与地址；CompareAndSwap 保证只有先到者写入
+	if agg.meta.Load() == nil && (result.Method != "" || result.URL != "") {
+		agg.meta.CompareAndSwap(nil, &apiMeta{method: result.Method, url: result.URL})
+	}
+	if result.StatusCode > 0 {
+		incrementCounter(agg.statusCode, result.StatusCode)
+	}
+	if result.ErrorMsg != "" {
+		incrementCounter(agg.errors, result.ErrorMsg)
+	} else if result.Error != nil {
+		incrementCounter(agg.errors, result.Error.Error())
 	}
 
 	agg.requests.Add(1)
@@ -112,6 +153,16 @@ func (a *apiAggregator) stats(totalTime time.Duration) []APIStat {
 		if done := s.Success + s.Failed; done > 0 {
 			s.SuccessRate = float64(s.Success) / float64(done) * 100
 		}
+		if meta := agg.meta.Load(); meta != nil {
+			s.Method, s.URL = meta.method, meta.url
+		}
+		if codes := agg.statusCode.ToMap(); len(codes) > 0 {
+			s.StatusCodes = codes
+		}
+		if errs := agg.errors.ToMap(); len(errs) > 0 {
+			s.Errors = errs
+		}
+
 		s.AvgMs = float64(agg.totalNanos.Load()) / float64(reqs) / 1e6
 		if mn := agg.minNanos.Load(); mn != math.MaxInt64 {
 			s.MinMs = float64(mn) / 1e6

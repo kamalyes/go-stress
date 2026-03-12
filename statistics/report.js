@@ -478,38 +478,409 @@ function round2(v) {
   return Math.round((v || 0) * 100) / 100;
 }
 
-// ============ API 汇总表（静态与实时共用） ============
-// 多接口场景：按 API 展示各自的请求数、成功率与延迟百分位
+// ============ API 汇总：Swagger 风格折叠项（静态与实时共用） ============
+//
+// 原先是一张 11 列平表，窄屏必须横向滚动，而真正要找的是「哪个接口慢、
+// 哪个在报错」。改成按接口折叠：行首是方法与路径，关键指标压进同一行，
+// 明细按需展开
+
+// apiItemsOpen 记住展开状态
+//
+// 实时模式每秒重渲染一次，若不记住状态，用户刚展开的接口会被立刻合上
+const apiItemsOpen = new Set();
+
+// methodOf 取方法名并归一为大写；缺失时按 — 展示而不是留空
+function methodOf(s) {
+  const m = (s.method || "").toUpperCase();
+  return m || "—";
+}
+
+// pathOf 只取 URL 的路径与查询部分
+//
+// 行首展示完整 URL 会被域名占满，同一服务的多个接口看起来几乎一样；
+// 完整地址在展开后的 api-url 里给出
+function pathOf(s) {
+  const raw = s.url || "";
+  if (!raw) return escapeHtml(s.name || "-");
+  try {
+    const u = new URL(raw);
+    return escapeHtml(u.pathname + (u.search || "")) || "/";
+  } catch (e) {
+    // 地址里含未替换的变量占位符时 URL 解析会失败，退回原串
+    return escapeHtml(raw);
+  }
+}
+
+// rateClass 成功率的着色档位
+function rateClass(rate, failed) {
+  if (failed > 0 && rate < 95) return "bad";
+  if (failed > 0) return "warn";
+  return "ok";
+}
+
+// statusCodeClass 按状态码首位着色
+function statusCodeClass(code) {
+  const n = parseInt(code, 10);
+  if (n >= 200 && n < 300) return "c2xx";
+  if (n >= 300 && n < 400) return "c3xx";
+  if (n >= 400 && n < 500) return "c4xx";
+  if (n >= 500) return "c5xx";
+  return "";
+}
+
+// renderStatusCodes 状态码分布，按码值升序
+//
+// 每个码是一个下钻入口：点「404 · 11」就在原地列出这 11 条里的真实请求，
+// 只给出一个数字说明不了「怎么个 404 法」
+function renderStatusCodes(codes, name, drill) {
+  const entries = Object.entries(codes || {});
+  if (entries.length === 0) return "";
+  const chips = entries
+    .sort((a, b) => parseInt(a[0], 10) - parseInt(b[0], 10))
+    .map(([code, n]) => {
+      const on =
+        drill && drill.kind === "code" && String(drill.key) === String(code)
+          ? " is-active"
+          : "";
+      return `<button type="button" class="api-code ${statusCodeClass(code)}${on}"
+          data-drill="code" data-key="${escapeAttr(code)}" data-api="${escapeAttr(name)}"
+          title="查看这 ${n} 条请求的明细">${escapeHtml(code)} · ${n}</button>`;
+    })
+    .join("");
+  return `<div class="api-block">
+      <div class="api-sub-title">状态码分布<span class="api-sub-hint">点任意状态码查看命中的请求</span></div>
+      <div class="api-codes">${chips}</div>
+    </div>`;
+}
+
+// renderAPIErrors 错误归类，按次数降序，最多展示 8 条
+function renderAPIErrors(errors, name, drill) {
+  const entries = Object.entries(errors || {});
+  if (entries.length === 0) return "";
+  const sorted = entries.sort((a, b) => b[1] - a[1]);
+  const shown = sorted.slice(0, 8);
+  const rest = sorted.length - shown.length;
+  const rows = shown
+    .map(([msg, n]) => {
+      const on =
+        drill && drill.kind === "error" && drill.key === msg ? " is-active" : "";
+      return `<button type="button" class="api-error${on}"
+        data-drill="error" data-key="${escapeAttr(msg)}" data-api="${escapeAttr(name)}"
+        title="查看这 ${n} 条请求的明细">
+        <span class="api-error-count">${n}×</span>
+        <span class="api-error-msg">${escapeHtml(msg)}</span>
+      </button>`;
+    })
+    .join("");
+  const more = rest > 0 ? `<div class="api-error-msg" style="font-size:11px;color:#6c757d;">另有 ${rest} 类错误，完整列表见请求明细</div>` : "";
+  return `<div class="api-block">
+      <div class="api-sub-title">错误归类</div>
+      <div class="api-errors">${rows}${more}</div>
+    </div>`;
+}
+
+// ---- 下钻：从「某接口的某个状态码 / 某类错误」落到真实请求 ----
+
+// apiDrillOpen 记住每个接口当前钻取的条件，apiSampleOpen 记住展开到底的样本
+//
+// 两份状态都必须留在渲染函数之外：实时模式每秒整体重渲染一次，
+// 不记住的话用户刚点开的 404 样本下一秒就被合上了
+const apiDrillOpen = new Map(); // name -> {kind: "code"|"error", key: string}
+const apiSampleOpen = new Set(); // name + "\u0000" + 明细 id
+
+// API_SAMPLE_LIMIT 一次下钻最多列出的样本条数
+//
+// 命中几万条时全列出来既无意义也会把页面卡住；看清「错成什么样」
+// 十几条足够，超出的数量照实写在标题上
+const API_SAMPLE_LIMIT = 20;
+
+// errorTextOf 取明细的错误文本，口径与 APIStat.Errors 的聚合键一致
+function errorTextOf(req) {
+  return req.error || req.error_msg || "";
+}
+
+// collectSamples 从已加载的明细里找出命中下钻条件的请求
+//
+// 返回 total 与 list 两个值：明细本身可能被 -details-limit 截断过，
+// 此时 total 会小于状态码分布上的计数，照实显示而不是假装取全了
+function collectSamples(name, drill) {
+  const out = { list: [], total: 0 };
+  if (!drill || !Array.isArray(allDetailsData)) return out;
+  for (let i = 0; i < allDetailsData.length; i++) {
+    const req = allDetailsData[i];
+    if ((req.api_name || "") !== name) continue;
+    if (drill.kind === "code") {
+      if (String(req.status_code || "") !== String(drill.key)) continue;
+    } else if (errorTextOf(req) !== drill.key) {
+      continue;
+    }
+    out.total++;
+    if (out.list.length < API_SAMPLE_LIMIT) out.list.push(req);
+  }
+  return out;
+}
+
+// sampleTime 样本行的时间戳，精确到毫秒
+function sampleTime(req) {
+  if (!req.timestamp) return "-";
+  const d = new Date(req.timestamp);
+  if (isNaN(d.getTime())) return "-";
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return d.toLocaleTimeString("en-GB", { hour12: false }) + "." + ms;
+}
+
+// sampleReason 样本行的一句话原因：优先取没通过的那条验证规则
+//
+// 验证规则带着 expect / actual，比「验证失败」这个归类文本有用得多
+function sampleReason(req) {
+  const rules = req.verifications || [];
+  for (let i = 0; i < rules.length; i++) {
+    const v = rules[i];
+    if (v.success || v.skipped) continue;
+    const detail = v.message || `期望 ${v.expect}，实际 ${v.actual}`;
+    return `${v.type}: ${detail}`;
+  }
+  return errorTextOf(req);
+}
+
+// renderSample 单条样本：一行摘要 + 按需展开的完整明细
+function renderSample(name, req, idx) {
+  const key = name + "\u0000" + (req.id || idx);
+  const isOpen = apiSampleOpen.has(key);
+  const code = req.status_code || 0;
+  const ms = ((req.duration || 0) / 1e6).toFixed(2);
+  const reason = sampleReason(req);
+  // 样本行优先显示服务端回带的 ID：拿它去对方日志系统里查最直接，
+  // 对方没回带时才退回本工具发出去的那个
+  const trace = req.server_trace_id || req.trace_id || "";
+  const traceFrom = req.server_trace_id
+    ? "服务端 " + (req.server_trace_header || "trace id")
+    : "trace_id（本工具发出）";
+
+  return `<div class="api-sample${isOpen ? " is-open" : ""}">
+      <button type="button" class="api-sample-head" data-sample="${escapeAttr(req.id || idx)}" data-api="${escapeAttr(name)}">
+        <span class="api-sample-idx">#${idx + 1}</span>
+        <span class="api-sample-time">${sampleTime(req)}</span>
+        <span class="api-sample-dur">${ms}ms</span>
+        <span class="api-code ${statusCodeClass(code)}">${code || "-"}</span>
+        ${trace ? `<span class="api-sample-trace${req.server_trace_id ? " is-server" : ""}" title="${escapeAttr(traceFrom)}">${escapeHtml(trace)}</span>` : ""}
+        ${reason ? `<span class="api-sample-reason">${escapeHtml(reason)}</span>` : ""}
+        <span class="api-caret">▶</span>
+      </button>
+      <div class="api-sample-body">${isOpen ? generateDetailContent(req) : ""}</div>
+    </div>`;
+}
+
+// renderDrill 下钻面板；未钻取时不占版面
+function renderDrill(s) {
+  const drill = apiDrillOpen.get(s.name);
+  if (!drill) return "";
+
+  const label =
+    drill.kind === "code"
+      ? `状态码 ${escapeHtml(String(drill.key))}`
+      : `错误「${escapeHtml(drill.key)}」`;
+
+  if (!Array.isArray(allDetailsData) || allDetailsData.length === 0) {
+    return `<div class="api-drill">
+        <div class="api-drill-title">${label} 的请求样本</div>
+        <div class="api-drill-empty">当前报告未加载请求明细，无法下钻（--details-limit 设为 0 时不导出明细）</div>
+      </div>`;
+  }
+
+  const found = collectSamples(s.name, drill);
+  if (found.total === 0) {
+    return `<div class="api-drill">
+        <div class="api-drill-title">${label} 的请求样本</div>
+        <div class="api-drill-empty">明细中没有命中的请求，可能已被明细条数上限截断</div>
+      </div>`;
+  }
+
+  const more =
+    found.total > found.list.length
+      ? `<span class="api-drill-more">命中 ${found.total} 条，展示前 ${found.list.length} 条</span>`
+      : `<span class="api-drill-more">命中 ${found.total} 条</span>`;
+
+  return `<div class="api-drill">
+      <div class="api-drill-title">${label} 的请求样本${more}
+        <button type="button" class="api-btn api-drill-close" data-drill="close" data-api="${escapeAttr(s.name)}">收起</button>
+      </div>
+      <div class="api-samples">${found.list.map((r, i) => renderSample(s.name, r, i)).join("")}</div>
+    </div>`;
+}
+
+// renderAPIItem 渲染单个接口的折叠项
+function renderAPIItem(s) {
+  const method = methodOf(s);
+  const failed = s.failed || 0;
+  const skipped = s.skipped || 0;
+  const rate = s.success_rate || 0;
+  const cls = rateClass(rate, failed);
+  const open = apiItemsOpen.has(s.name) ? " is-open" : "";
+  const failing = failed > 0 ? " has-failure" : "";
+
+  const chips = [
+    `<span class="api-chip">${s.requests} 次</span>`,
+    `<span class="api-chip ${cls}">${rate.toFixed(2)}%</span>`,
+    `<span class="api-chip">P95 ${s.p95_ms.toFixed(1)}ms</span>`,
+  ];
+  if (failed > 0) chips.push(`<span class="api-chip bad">失败 ${failed}</span>`);
+  if (skipped > 0) chips.push(`<span class="api-chip warn">跳过 ${skipped}</span>`);
+
+  const metrics = [
+    ["请求数", s.requests, ""],
+    ["成功", s.success, "ok"],
+    ["失败", failed, failed > 0 ? "bad" : ""],
+    ["跳过", skipped, ""],
+    // 成功率在头部已有 chip，这里仍保留一格：指标共 12 项时恰好铺满 6 列两行，
+    // 不会像 11 项那样在末行留下一个孤零零的格子
+    ["成功率", round2(s.success_rate) + "%", rateClass(s.success_rate, failed)],
+    ["QPS", round2(s.qps), ""],
+    ["平均", s.avg_ms.toFixed(2) + "ms", ""],
+    ["最小", s.min_ms.toFixed(2) + "ms", ""],
+    ["最大", s.max_ms.toFixed(2) + "ms", ""],
+    ["P50", s.p50_ms.toFixed(2) + "ms", ""],
+    ["P95", s.p95_ms.toFixed(2) + "ms", ""],
+    ["P99", s.p99_ms.toFixed(2) + "ms", ""],
+  ]
+    .map(
+      ([label, value, k]) => `<div class="api-metric">
+        <div class="api-metric-label">${label}</div>
+        <div class="api-metric-value ${k}">${value}</div>
+      </div>`
+    )
+    .join("");
+
+  const urlBlock = s.url
+    ? `<div class="api-url">${escapeHtml(s.url)}</div>`
+    : "";
+
+  const drill = apiDrillOpen.get(s.name);
+
+  return `<div class="api-item${open}${failing}" data-method="${escapeAttr(method)}" data-api="${escapeAttr(s.name)}">
+      <button type="button" class="api-head">
+        <span class="api-method">${escapeHtml(method)}</span>
+        <span class="api-path">${pathOf(s)}</span>
+        <span class="api-name">${escapeHtml(s.name)}</span>
+        <span class="api-chips">${chips.join("")}</span>
+        <span class="api-caret">▶</span>
+      </button>
+      <div class="api-body">
+        ${urlBlock}
+        <div class="api-metrics">${metrics}</div>
+        ${renderStatusCodes(s.status_codes, s.name, drill)}
+        ${renderAPIErrors(s.errors, s.name, drill)}
+        ${renderDrill(s)}
+      </div>
+    </div>`;
+}
+
+// apiStatsCache 供筛选与展开/收起复用，避免重新取数
+let apiStatsCache = [];
+
+// applyAPIFilter 按关键字筛选接口（匹配名称、方法、地址）
+function applyAPIFilter() {
+  const input = document.getElementById("apiFilter");
+  const list = document.getElementById("api-list");
+  const empty = document.getElementById("apiEmpty");
+  if (!list) return;
+
+  const kw = ((input && input.value) || "").trim().toLowerCase();
+  const matched = kw
+    ? apiStatsCache.filter((s) => {
+        const hay = [s.name, s.method, s.url].join(" ").toLowerCase();
+        return hay.indexOf(kw) !== -1;
+      })
+    : apiStatsCache;
+
+  list.innerHTML = matched.map(renderAPIItem).join("");
+  if (empty) empty.style.display = matched.length === 0 ? "" : "none";
+}
+
 function renderAPIStats(data) {
   const section = document.getElementById("apiSection");
-  const tbody = document.getElementById("api-tbody");
-  if (!section || !tbody) return;
+  const list = document.getElementById("api-list");
+  if (!section || !list) return;
 
-  const stats = data && data.api_stats;
-  if (!stats || stats.length === 0) {
+  const stats = (data && data.api_stats) || [];
+  if (stats.length === 0) {
     section.style.display = "none";
     return;
   }
 
   section.style.display = "";
-  tbody.innerHTML = stats
-    .map(
-      (s) => `<tr>
-        <td>${escapeHtml(s.name)}</td>
-        <td>${s.requests}</td>
-        <td style="color: #28a745;">${s.success}</td>
-        <td style="color: #dc3545;">${s.failed}</td>
-        <td>${s.skipped}</td>
-        <td>${s.success_rate.toFixed(2)}%</td>
-        <td>${s.avg_ms.toFixed(2)}ms</td>
-        <td>${s.p50_ms.toFixed(2)}ms</td>
-        <td>${s.p95_ms.toFixed(2)}ms</td>
-        <td>${s.p99_ms.toFixed(2)}ms</td>
-        <td>${round2(s.qps)}</td>
-      </tr>`
-    )
-    .join("");
+  apiStatsCache = stats;
+  applyAPIFilter();
 }
+
+// 事件用委托绑定在容器上
+//
+// 折叠项每次渲染都会重建，逐个绑定 onclick 会在实时模式下反复失效；
+// 委托到不被重建的容器上则一次绑定长期有效
+document.addEventListener("click", function (e) {
+  if (!e.target.closest) return;
+
+  // 下钻入口：状态码、错误行、收起按钮
+  const trigger = e.target.closest("[data-drill]");
+  if (trigger) {
+    const name = trigger.getAttribute("data-api");
+    const kind = trigger.getAttribute("data-drill");
+    if (kind === "close") {
+      apiDrillOpen.delete(name);
+    } else {
+      const key = trigger.getAttribute("data-key");
+      const cur = apiDrillOpen.get(name);
+      // 再点一次同一个入口则收起，省去专门去找收起按钮
+      if (cur && cur.kind === kind && cur.key === key) {
+        apiDrillOpen.delete(name);
+      } else {
+        apiDrillOpen.set(name, { kind: kind, key: key });
+      }
+    }
+    applyAPIFilter();
+    return;
+  }
+
+  // 样本行展开/收起
+  const sampleHead = e.target.closest(".api-sample-head");
+  if (sampleHead) {
+    const key =
+      sampleHead.getAttribute("data-api") +
+      "\u0000" +
+      sampleHead.getAttribute("data-sample");
+    if (apiSampleOpen.has(key)) {
+      apiSampleOpen.delete(key);
+    } else {
+      apiSampleOpen.add(key);
+    }
+    applyAPIFilter();
+    return;
+  }
+
+  const head = e.target.closest(".api-head");
+  if (head) {
+    const item = head.parentElement;
+    const name = item.getAttribute("data-api");
+    if (item.classList.toggle("is-open")) {
+      apiItemsOpen.add(name);
+    } else {
+      apiItemsOpen.delete(name);
+    }
+    return;
+  }
+
+  if (e.target.id === "apiExpandAll") {
+    apiStatsCache.forEach((s) => apiItemsOpen.add(s.name));
+    applyAPIFilter();
+  } else if (e.target.id === "apiCollapseAll") {
+    apiItemsOpen.clear();
+    applyAPIFilter();
+  }
+});
+
+document.addEventListener("input", function (e) {
+  if (e.target.id === "apiFilter") applyAPIFilter();
+});
 
 // ============ 静态模式数据更新 ============
 function updateStaticMetrics(data) {
@@ -916,6 +1287,20 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+// escapeAttr 供双引号属性值使用
+//
+// escapeHtml 走的是 textContent -> innerHTML，这条路径不转义引号：
+// 错误文本里只要出现一个 " 就能把属性提前闭合，整段标记就歪了
+function escapeAttr(text) {
+  if (text === null || text === undefined) return "";
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function toggleDetails(detailsId) {
   const row = document.getElementById(detailsId);
   if (row) {
@@ -1092,6 +1477,15 @@ function generateDetailContent(req) {
   html += '<div class="detail-section"><strong>请求方法:</strong> ' + formatHttpMethod(req.method || req.request_method) + '</div>';
   html += '<div class="detail-section"><strong>响应时间:</strong><pre>' + ((req.duration ? req.duration / 1000000 : req.duration_ms) || 0).toFixed(2) + 'ms</pre></div>';
   html += '<div class="detail-section"><strong>状态码:</strong><pre>' + (req.status_code || 0) + '</pre></div>';
+  // 两个追踪 ID 分开列：trace_id 是本工具发出去的，server_trace_id 是对端回带的，
+  // 查对方日志时该拿哪一个取决于对方有没有接 W3C 链路
+  if (req.trace_id) {
+    html += '<div class="detail-section"><strong>Trace ID (本工具发出):</strong><pre>' + escapeHtml(req.trace_id) + '</pre></div>';
+  }
+  if (req.server_trace_id) {
+    const from = req.server_trace_header ? ' · 来自响应头 ' + escapeHtml(req.server_trace_header) : '';
+    html += '<div class="detail-section"><strong>服务端 Trace ID' + from + ':</strong><pre>' + escapeHtml(req.server_trace_id) + '</pre></div>';
+  }
   html += '</div>';
   
   // Headers Tab

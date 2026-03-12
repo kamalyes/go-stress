@@ -67,9 +67,25 @@ gRPC 的 TLS 配置只能在配置文件里给出，见 [配置文件 · gRPC](C
 
 | 参数 | 类型 | 默认值 | 说明 |
 |:-----|:-----|:-------|:-----|
-| `-no-trace-header` | bool | `false` | 不注入 `traceparent` 请求头 |
+| `-no-trace-header` | bool | `false` | 不注入 `traceparent` 与 `X-Request-Id` 请求头 |
+| `-request-id-header` | string | `X-Request-Id` | 请求 ID 头名，填 `-` 表示不带 |
+| `-trace-capture` | string | 见下 | 从响应头回捞追踪 ID 的字段，逗号分隔，填 `-` 表示不捞 |
 
-默认每个请求都带 W3C `traceparent`，使压测结果能与被压服务的日志对齐，见 [链路追踪](TRACING.md)
+默认每个请求都带 W3C `traceparent` 与 `X-Request-Id`（两者同值），使压测结果能与被压服务的日志对齐
+
+同时默认会从响应头里把服务端自己生成的追踪 ID 捞回来，**匹配不区分大小写**，按序取第一个命中：
+
+```
+X-Trace-Id → X-Request-Id → X-Correlation-Id → Trace-Id → Request-Id
+→ X-Amzn-Trace-Id → X-Cloud-Trace-Context → X-B3-TraceId → traceparent
+```
+
+```bash
+# 只捞自家那两个字段，顺序即优先级
+go-stress -url https://api.example.com -trace-capture "x-biz-trace,x-trace-id"
+```
+
+捞到的值写入结果的 `server_trace_id` 与 `server_trace_header`，HTML 报告的 API 条目里点开状态码即可逐条看到，完整说明见 [链路追踪](TRACING.md)
 
 ## 💾 存储与报告
 

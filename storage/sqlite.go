@@ -122,7 +122,9 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 		response_headers TEXT,
 		verifications TEXT,
 		extracted_vars TEXT,
-		trace_id TEXT
+		trace_id TEXT,
+		server_trace_id TEXT,
+		server_trace_header TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_node_id ON %s(node_id);
 	CREATE INDEX IF NOT EXISTS idx_task_id ON %s(task_id);
@@ -138,13 +140,15 @@ func NewDetailStorage(dbPath, nodeID string, log logger.ILogger) (*DetailStorage
 	}
 
 	// 既有库补列：CREATE TABLE IF NOT EXISTS 对已存在的表什么都不做，
-	// 旧库因此没有 trace_id，而查询按固定列名读取会直接失败
+	// 旧库因此没有这几列，而查询按固定列名读取会直接失败
 	// 列已存在时 SQLite 报 "duplicate column name"，属预期，忽略即可
-	if _, err := db.Exec(fmt.Sprintf(
-		"ALTER TABLE %s ADD COLUMN trace_id TEXT", tableRequestDetails,
-	)); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-		db.Close()
-		return nil, fmt.Errorf("升级表结构失败: %w", err)
+	for _, col := range []string{"trace_id", "server_trace_id", "server_trace_header"} {
+		if _, err := db.Exec(fmt.Sprintf(
+			"ALTER TABLE %s ADD COLUMN %s TEXT", tableRequestDetails, col,
+		)); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("升级表结构失败（列 %s）: %w", col, err)
+		}
 	}
 
 	if dbPath != ":memory:" {
@@ -267,8 +271,9 @@ func (s *DetailStorage) insertBatch(batch []*RequestResult) error {
 		INSERT INTO %s (
 			id, node_id, task_id, group_id, api_name, timestamp, url, method, query, headers, body,
 			duration, status_code, success, skipped, size, error,
-			response_body, response_headers, verifications, extracted_vars, trace_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			response_body, response_headers, verifications, extracted_vars, trace_id,
+			server_trace_id, server_trace_header
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, tableRequestDetails))
 	if err != nil {
 		return err
@@ -305,6 +310,8 @@ func (s *DetailStorage) insertBatch(batch []*RequestResult) error {
 			string(verificationsJSON),
 			string(extractedVarsJSON),
 			detail.TraceID,
+			detail.ServerTraceID,
+			detail.ServerTraceHeader,
 		)
 		if err != nil {
 			return err
@@ -321,7 +328,8 @@ func (s *DetailStorage) insertBatch(batch []*RequestResult) error {
 const detailColumns = `id, node_id, task_id, group_id, api_name, timestamp,
 	url, method, query, headers, body,
 	duration, status_code, success, skipped, size, error,
-	response_body, response_headers, verifications, extracted_vars, trace_id`
+	response_body, response_headers, verifications, extracted_vars, trace_id,
+	server_trace_id, server_trace_header`
 
 // Query 分页查询请求详情
 func (s *DetailStorage) Query(offset, limit int, statusFilter StatusFilter, nodeID, taskID string) ([]*RequestResult, error) {
@@ -434,8 +442,8 @@ func (s *DetailStorage) scanDetail(rows *sql.Rows) (*RequestResult, error) {
 		success, skipped                     int
 		headersJSON, respHeadersJSON         string
 		verificationsJSON, extractedVarsJSON string
-		// 旧库经 ALTER TABLE 补出的 trace_id 对历史行为 NULL，需用可空类型接
-		traceID sql.NullString
+		// 旧库经 ALTER TABLE 补出的这几列对历史行为 NULL，需用可空类型接
+		traceID, serverTraceID, serverTraceHeader sql.NullString
 	)
 
 	err := rows.Scan(
@@ -443,7 +451,7 @@ func (s *DetailStorage) scanDetail(rows *sql.Rows) (*RequestResult, error) {
 		&detail.URL, &detail.Method, &detail.Query, &headersJSON, &detail.Body,
 		&duration, &detail.StatusCode, &success, &skipped, &detail.Size, &detail.ErrorMsg,
 		&detail.ResponseBody, &respHeadersJSON, &verificationsJSON, &extractedVarsJSON,
-		&traceID,
+		&traceID, &serverTraceID, &serverTraceHeader,
 	)
 	if err != nil {
 		return nil, err
@@ -454,6 +462,8 @@ func (s *DetailStorage) scanDetail(rows *sql.Rows) (*RequestResult, error) {
 	detail.Success = success == 1
 	detail.Skipped = skipped == 1
 	detail.TraceID = traceID.String
+	detail.ServerTraceID = serverTraceID.String
+	detail.ServerTraceHeader = serverTraceHeader.String
 
 	json.Unmarshal([]byte(headersJSON), &detail.Headers)
 	json.Unmarshal([]byte(respHeadersJSON), &detail.ResponseHeaders)

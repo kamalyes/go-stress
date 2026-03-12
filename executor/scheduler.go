@@ -34,7 +34,9 @@ type Scheduler struct {
 	controller       Controller               // 控制器
 	logger           logger.ILogger
 
-	injectTraceHeader bool // 是否向请求注入 traceparent 头
+	injectTraceHeader bool          // 是否向请求注入 traceparent 头
+	requestIDHeader   string        // 请求 ID 头名，空串表示不带
+	traceCapture      *traceCapture // 响应头追踪 ID 回捞器（全部 Worker 共享）
 
 	thinkTime *config.ThinkTimeConfig // 全局思考时间
 	csvSource *CSVSource              // CSV 数据源，全部 Worker 共享
@@ -54,7 +56,9 @@ type SchedulerConfig struct {
 	Controller       Controller               // 控制器（可选）
 	Logger           logger.ILogger
 
-	InjectTraceHeader bool // 是否向请求注入 traceparent 头
+	InjectTraceHeader   bool     // 是否向请求注入 traceparent 头
+	RequestIDHeader     string   // 请求 ID 头名，空串表示不带
+	TraceCaptureHeaders []string // 从响应头回捞的追踪字段（空则取默认列表）
 
 	ThinkTime *config.ThinkTimeConfig // 全局思考时间（可选）
 	CSVSource *CSVSource              // CSV 数据源（可选）
@@ -82,6 +86,9 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		logger:           cfg.Logger,
 
 		injectTraceHeader: cfg.InjectTraceHeader,
+		requestIDHeader:   cfg.RequestIDHeader,
+		// 回捞器在此构造一次，所有 Worker 共享同一份只读实例
+		traceCapture: newTraceCapture(cfg.TraceCaptureHeaders),
 
 		thinkTime: cfg.ThinkTime,
 		csvSource: cfg.CSVSource,
@@ -160,6 +167,8 @@ func (s *Scheduler) runWorker(ctx context.Context, workerID uint64) error {
 		Logger:      s.logger,
 
 		InjectTraceHeader: s.injectTraceHeader,
+		RequestIDHeader:   s.requestIDHeader,
+		TraceCapture:      s.traceCapture,
 
 		ThinkTime: s.thinkTime,
 		CSVSource: s.csvSource,

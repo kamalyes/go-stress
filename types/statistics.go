@@ -34,6 +34,14 @@ type RequestResult struct {
 	APIName    string        `json:"api_name,omitempty"`    // API名称（如 create_ticket, send_message）
 	TraceID    string        `json:"trace_id,omitempty"`    // W3C trace-id（随 traceparent 头发往被压服务，用于与服务端链路对齐）
 
+	// ServerTraceID 从响应头里回捞到的、由被压服务自己生成的追踪 ID
+	//
+	// 与 TraceID 的区别：TraceID 是本工具发出去的，ServerTraceID 是对方发回来的。
+	// 对端若没接链路中间件、而是自建了一套 ID，就只能靠这个去它的日志里查
+	ServerTraceID string `json:"server_trace_id,omitempty"`
+	// ServerTraceHeader ServerTraceID 实际来自哪个响应头（保留原始大小写）
+	ServerTraceHeader string `json:"server_trace_header,omitempty"`
+
 	// 请求详情
 	URL     string            `json:"url,omitempty"`     // 请求URL
 	Method  string            `json:"method,omitempty"`  // 请求方法
