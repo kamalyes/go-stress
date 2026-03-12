@@ -671,6 +671,22 @@ function renderSample(name, req, idx) {
     </div>`;
 }
 
+// drillEmptyHint 下钻取不到样本时的说明
+//
+// 两种模式的成因完全不同，笼统写一句会把人引到错误的方向：
+//   - 静态报告：明细是一次性导出的，取不到多半是被条数上限截断了
+//   - 实时模式：只加载了当前这一页，命中的请求可能在别的页上
+function drillEmptyHint(noDataAtAll) {
+  if (isRealtime) {
+    return noDataAtAll
+      ? "明细还在加载中，稍候再点一次；实时模式下只加载当前页，命中的请求可能在其他页"
+      : "当前页的明细里没有命中的请求，到下方「请求明细」翻页或切换状态筛选后再试";
+  }
+  return noDataAtAll
+    ? "本报告未导出请求明细，无法下钻（--details-limit 设为 0 时不导出明细）"
+    : "明细中没有命中的请求，可能已被明细条数上限截断";
+}
+
 // renderDrill 下钻面板；未钻取时不占版面
 function renderDrill(s) {
   const drill = apiDrillOpen.get(s.name);
@@ -684,7 +700,7 @@ function renderDrill(s) {
   if (!Array.isArray(allDetailsData) || allDetailsData.length === 0) {
     return `<div class="api-drill">
         <div class="api-drill-title">${label} 的请求样本</div>
-        <div class="api-drill-empty">当前报告未加载请求明细，无法下钻（--details-limit 设为 0 时不导出明细）</div>
+        <div class="api-drill-empty">${drillEmptyHint(true)}</div>
       </div>`;
   }
 
@@ -692,7 +708,7 @@ function renderDrill(s) {
   if (found.total === 0) {
     return `<div class="api-drill">
         <div class="api-drill-title">${label} 的请求样本</div>
-        <div class="api-drill-empty">明细中没有命中的请求，可能已被明细条数上限截断</div>
+        <div class="api-drill-empty">${drillEmptyHint(false)}</div>
       </div>`;
   }
 

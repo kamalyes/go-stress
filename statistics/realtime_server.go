@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -169,10 +168,8 @@ func (s *RealtimeServer) handleCSS(w http.ResponseWriter, r *http.Request) {
 // handleJS 提供JavaScript脚本文件
 func (s *RealtimeServer) handleJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	// 替换占位符为实时模式
-	jsContent := strings.ReplaceAll(reportJS, "IS_REALTIME_PLACEHOLDER", "true")
-	jsContent = strings.ReplaceAll(jsContent, "JSON_FILENAME_PLACEHOLDER", "")
-	w.Write([]byte(jsContent))
+	// 占位符替换统一走 RealtimeReportJS，避免两处各写一遍再走散
+	w.Write([]byte(RealtimeReportJS()))
 }
 
 // handleActionsJS 提供操作功能JavaScript脚本文件

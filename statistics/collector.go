@@ -166,6 +166,18 @@ func (c *Collector) Collect(result *RequestResult) {
 		result.ErrorMsg = result.Error.Error()
 	}
 
+	// 打上节点归属
+	//
+	// 此前没有任何地方给 result.NodeID 赋值：存储实例自己知道 nodeID，
+	// 但每条记录的这个字段恒为空串。于是分布式模式下 Master 按 slave_id
+	// 查明细时，Query 的 detail.NodeID != nodeID 对每一行都成立，
+	// 明细面板永远是空的 —— 而 metrics 却显示有几万条，看着像是查询挂了
+	//
+	// 已有取值不覆盖：分布式回放或跨节点汇总时记录可能已带着来源节点
+	if result.NodeID == "" {
+		result.NodeID = c.storage.GetNodeID()
+	}
+
 	// 直接写入存储
 	c.storage.Write(result)
 }

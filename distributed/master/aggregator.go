@@ -11,10 +11,11 @@
 package master
 
 import (
-	"sort"
+	"math"
 	"time"
 
 	"github.com/kamalyes/go-stress/distributed/common"
+	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-toolbox/pkg/mathx"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
@@ -38,6 +39,12 @@ type TaskAggregation struct {
 	Latencies       []float64
 	StatusCodes     map[int]int64
 	ErrorTypes      map[string]int64
+
+	// APIStats 按 API 名跨 Slave、跨上报窗口的累计
+	//
+	// 用 map 而非切片：每个 Slave 每秒报一个窗口，同一个 API 会反复出现，
+	// 必须按名字归并，合并口径见 common.MergeAPIStats
+	APIStats map[string]*statistics.APIStat
 }
 
 // NewDataAggregator 创建数据聚合器
@@ -64,12 +71,21 @@ func (da *DataAggregator) Add(stats *common.SlaveStats) {
 				StatusCodes: make(map[int]int64),
 				ErrorTypes:  make(map[string]int64),
 				Latencies:   make([]float64, 0),
+				APIStats:    make(map[string]*statistics.APIStat),
 			}
 			da.taskData[taskID] = agg
 		}
 
-		// 更新 Slave 统计
-		agg.SlaveStats[stats.SlaveID] = stats
+		// 按 Slave 累加而非覆盖
+		//
+		// 上报是「每秒一个窗口」，覆盖的话 BySlave 里存的永远只是最近一秒；
+		// 而分布式面板跳转实时报告时带的正是 ?slave_id=，页面于是把最近一秒
+		// 的几十次请求当成总数显示
+		if cur, ok := agg.SlaveStats[stats.SlaveID]; ok {
+			common.MergeSlaveStats(cur, stats)
+		} else {
+			agg.SlaveStats[stats.SlaveID] = common.CloneSlaveStats(stats)
+		}
 		agg.LastUpdate = time.Now()
 
 		// 聚合数据
@@ -81,6 +97,17 @@ func (da *DataAggregator) Add(stats *common.SlaveStats) {
 		for code, count := range stats.StatusCodes {
 			agg.StatusCodes[code] += count
 		}
+
+		// 聚合错误类型：此前漏了这一步，于是 Master 的错误分布恒为空
+		for errType, count := range stats.ErrorTypes {
+			agg.ErrorTypes[errType] += count
+		}
+
+		// 聚合 per-API
+		if agg.APIStats == nil {
+			agg.APIStats = make(map[string]*statistics.APIStat)
+		}
+		common.MergeAPIStats(agg.APIStats, stats.APIStats)
 	})
 }
 
@@ -118,6 +145,7 @@ func (da *DataAggregator) buildAggregatedStats(agg *TaskAggregation) *common.Agg
 		BySlave:         agg.SlaveStats,
 		StatusCodes:     agg.StatusCodes,
 		ErrorTypes:      agg.ErrorTypes,
+		APIStats:        common.FlattenAPIStats(agg.APIStats),
 	}
 
 	// 计算成功率
@@ -125,30 +153,42 @@ func (da *DataAggregator) buildAggregatedStats(agg *TaskAggregation) *common.Agg
 		stats.SuccessRate = float64(stats.SuccessRequests) / float64(stats.TotalRequests) * 100
 	}
 
-	// 收集所有延迟数据
-	latencies := make([]float64, 0)
-	totalQPS := 0.0
-
+	// 跨 Slave 汇总延迟
+	//
+	// 原先的做法是把每个 Slave 的 avg/p95/p99 三个数倒进一个切片，再对这个
+	// 混合池求百分位 —— MinLatency 于是成了「各 Slave 的 avg/p95/p99 里最小的
+	// 那一个」，跟最小延迟毫无关系。改为按各自的语义归并：极值取极值，
+	// 均值按请求数加权，百分位取各 Slave 的较大者（宁可保守也不低报）
+	var weighted float64
 	for _, slaveStats := range agg.SlaveStats {
-		latencies = append(latencies, slaveStats.AvgLatency)
-		latencies = append(latencies, slaveStats.P95Latency)
-		latencies = append(latencies, slaveStats.P99Latency)
-		totalQPS += slaveStats.QPS
+		if stats.MinLatency == 0 || (slaveStats.MinLatency > 0 && slaveStats.MinLatency < stats.MinLatency) {
+			stats.MinLatency = slaveStats.MinLatency
+		}
+		stats.MaxLatency = math.Max(stats.MaxLatency, slaveStats.MaxLatency)
+		stats.P50Latency = math.Max(stats.P50Latency, slaveStats.P50Latency)
+		stats.P90Latency = math.Max(stats.P90Latency, slaveStats.P90Latency)
+		stats.P95Latency = math.Max(stats.P95Latency, slaveStats.P95Latency)
+		stats.P99Latency = math.Max(stats.P99Latency, slaveStats.P99Latency)
+		weighted += slaveStats.AvgLatency * float64(slaveStats.TotalRequests)
+	}
+	if stats.TotalRequests > 0 {
+		stats.AvgLatency = weighted / float64(stats.TotalRequests)
 	}
 
-	// 计算延迟统计
-	if len(latencies) > 0 {
-		sort.Float64s(latencies)
-		stats.MinLatency = latencies[0]
-		stats.MaxLatency = latencies[len(latencies)-1]
-		stats.AvgLatency = mathx.Mean(latencies)
-		stats.P50Latency = mathx.Percentile(latencies, 50)
-		stats.P90Latency = mathx.Percentile(latencies, 90)
-		stats.P95Latency = mathx.Percentile(latencies, 95)
-		stats.P99Latency = mathx.Percentile(latencies, 99)
+	// 速率按「累计请求数 / 实际耗时」折算
+	//
+	// 累加各窗口的瞬时 QPS 会把 90 秒的速率叠成 90 倍，只取最后一个窗口
+	// 又丢掉跨 Slave 的并行度；按总量除以耗时得到整段压测的平均速率，
+	// 与单机报告里 QPS 的口径一致
+	elapsed := agg.LastUpdate.Sub(agg.StartTime).Seconds()
+	if elapsed > 0 {
+		stats.TotalQPS = float64(stats.TotalRequests) / elapsed
+		for _, slaveStats := range agg.SlaveStats {
+			slaveStats.QPS = float64(slaveStats.TotalRequests) / elapsed
+			common.RecomputeAPIQPS(slaveStats.APIStats, elapsed)
+		}
+		common.RecomputeAPIQPS(stats.APIStats, elapsed)
 	}
-
-	stats.TotalQPS = totalQPS
 
 	return stats
 }

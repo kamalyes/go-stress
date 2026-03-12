@@ -12,6 +12,8 @@ package common
 
 import (
 	"time"
+
+	"github.com/kamalyes/go-stress/statistics"
 )
 
 // ResourceUsage 资源使用情况
@@ -49,6 +51,13 @@ type AggregatedStats struct {
 	BySlave         map[string]*SlaveStats `json:"by_slave"`
 	StatusCodes     map[int]int64          `json:"status_codes"`
 	ErrorTypes      map[string]int64       `json:"error_types"`
+
+	// APIStats 按 API 名跨 Slave 聚合的统计
+	//
+	// 直接复用 statistics.APIStat 而不另立一套：报告前端（report.js）读的就是
+	// 这个结构的 JSON 标签，单机与分布式共用同一份渲染代码，字段一旦分家，
+	// 分布式这边的 API 汇总就会静默消失 —— 此前正是如此
+	APIStats []statistics.APIStat `json:"api_stats,omitempty"`
 }
 
 // TimeRange 时间范围
@@ -76,4 +85,7 @@ type SlaveStats struct {
 	TotalQPS        float64          `json:"total_qps"`
 	StatusCodes     map[int]int64    `json:"status_codes"`
 	ErrorTypes      map[string]int64 `json:"error_types"`
+
+	// APIStats 本 Slave 在该上报窗口内按 API 名聚合的统计
+	APIStats []statistics.APIStat `json:"api_stats,omitempty"`
 }

@@ -184,6 +184,29 @@ message SlaveStatus {
 
 // 统计数据 | EN Statistics Data
 // 从节点上报的压测任务实时统计数据 | EN Real-time statistics data of stress test task reported by slave node
+// 单个 API 的聚合统计 | EN Per-API aggregated statistics
+// 多接口压测时，Master 只拿到全局计数是看不出「哪个接口在报错」的，
+// 必须按 API 名把这一层带过来 | EN Without this, the master only sees global
+// counters and cannot tell which API is failing
+message APIStatsData {
+  string name = 1;              // API 名称 | EN API name
+  string method = 2;            // 请求方法（取首次请求的取值） | EN HTTP method (from first request)
+  string url = 3;               // 请求地址（取首次请求的取值） | EN Request URL (from first request)
+  int64 requests = 4;           // 该 API 的请求总数 | EN Total requests for this API
+  int64 success = 5;            // 成功数 | EN Success count
+  int64 failed = 6;             // 失败数 | EN Failure count
+  int64 skipped = 7;            // 跳过数（因依赖失败） | EN Skipped count (dependency failed)
+  double avg_latency = 8;       // 平均耗时（毫秒） | EN Average latency (milliseconds)
+  double min_latency = 9;       // 最小耗时（毫秒） | EN Minimum latency (milliseconds)
+  double max_latency = 10;      // 最大耗时（毫秒） | EN Maximum latency (milliseconds)
+  double p50_latency = 11;      // P50（毫秒） | EN P50 latency (milliseconds)
+  double p95_latency = 12;      // P95（毫秒） | EN P95 latency (milliseconds)
+  double p99_latency = 13;      // P99（毫秒） | EN P99 latency (milliseconds)
+  double qps = 14;              // 该 API 的 QPS | EN QPS for this API
+  map<string, int64> status_codes = 15; // 该 API 的状态码分布 | EN Status code distribution for this API
+  map<string, int64> errors = 16;       // 该 API 的错误归类 | EN Error classification for this API
+}
+
 message StatsData {
   string slave_id = 1;          // 从节点 ID | EN Slave node ID
   string task_id = 2;           // 任务 ID | EN Task ID
@@ -199,6 +222,7 @@ message StatsData {
   double qps = 12;              // 每秒请求数（Queries Per Second） | EN Queries Per Second
   map<string, int64> status_codes = 13; // HTTP 状态码/GRPC 错误码计数（如 "200": 1000, "500": 50） | EN HTTP status code/GRPC error code count (e.g., "200": 1000, "500": 50)
   map<string, int64> error_types = 14;  // 错误类型计数（如 "timeout": 20, "connection_error": 10） | EN Error type count (e.g., "timeout": 20, "connection_error": 10)
+  repeated APIStatsData api_stats = 15; // 按 API 名聚合的统计（多接口场景） | EN Per-API aggregated statistics (multi-API scenarios)
 }
 
 // 上报响应 | EN Report Response
@@ -287,6 +311,28 @@ message RequestDetail {
   string response_body = 19;    // 响应体 | EN Response body
   map<string, string> response_headers = 20;  // 响应头 | EN Response headers
   map<string, string> extracted_vars = 21;    // 提取的变量 | EN Extracted variables
+
+  // 以下四项此前缺失，导致 Master 侧的明细下钻既看不到追踪 ID，
+  // 也拿不到「哪条断言没过、期望什么实际什么」
+  // | EN These four were missing, so the master-side drill-down could show
+  // neither trace IDs nor which assertion failed with expect/actual
+  string trace_id = 22;                       // 本工具发出的 W3C trace-id | EN W3C trace-id sent by this tool
+  string server_trace_id = 23;                // 从响应头回捞的服务端追踪 ID | EN Server trace ID captured from response headers
+  string server_trace_header = 24;            // 该 ID 来自哪个响应头 | EN Which response header it came from
+  repeated VerificationData verifications = 25; // 验证结果列表 | EN Verification results
+}
+
+// 单条验证结果 | EN Single verification result
+message VerificationData {
+  string type = 1;              // 验证类型（STATUS_CODE、JSONPATH 等） | EN Verification type (STATUS_CODE, JSONPATH, etc.)
+  bool success = 2;             // 是否通过 | EN Whether it passed
+  bool skipped = 3;             // 是否未执行 | EN Whether it was skipped
+  string message = 4;           // 验证消息（失败原因） | EN Verification message (failure reason)
+  string expect = 5;            // 期望值 | EN Expected value
+  string actual = 6;            // 实际值 | EN Actual value
+  string field = 7;             // 验证的字段（JSONPath、Header 名等） | EN Field under verification (JSONPath, header name, etc.)
+  string operator = 8;          // 操作符（eq、contains 等） | EN Operator (eq, contains, etc.)
+  string description = 9;       // 验证描述 | EN Verification description
 }
 
 // 详情查询响应 | EN Details Query Response

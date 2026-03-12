@@ -15,6 +15,7 @@ import (
 
 	"github.com/kamalyes/go-logger"
 	"github.com/kamalyes/go-stress/distributed/common"
+	"github.com/kamalyes/go-stress/statistics"
 	"github.com/kamalyes/go-toolbox/pkg/syncx"
 )
 
@@ -157,6 +158,8 @@ func (sc *StatsCollector) GetAggregatedStats() *common.AggregatedStats {
 		ErrorTypes:  make(map[string]int64),
 		BySlave:     make(map[string]*common.SlaveStats),
 	}
+	// 跨任务再归并一次 per-API：同一个接口名可能出现在多个任务里
+	mergedAPIs := make(map[string]*statistics.APIStat)
 
 	for _, agg := range allAggs {
 		merged.TotalRequests += agg.TotalRequests
@@ -179,7 +182,11 @@ func (sc *StatsCollector) GetAggregatedStats() *common.AggregatedStats {
 		for slaveID, stats := range agg.BySlave {
 			merged.BySlave[slaveID] = stats
 		}
+
+		common.MergeAPIStats(mergedAPIs, agg.APIStats)
 	}
+
+	merged.APIStats = common.FlattenAPIStats(mergedAPIs)
 
 	// 重新计算成功率
 	if merged.TotalRequests > 0 {

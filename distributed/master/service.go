@@ -131,6 +131,8 @@ func (s *MasterServiceServer) ReportStats(stream pb.MasterService_ReportStatsSer
 			P99Latency:      stats.P99Latency,
 			QPS:             stats.Qps,
 			StatusCodes:     convertStatusCodes(stats.StatusCodes),
+			ErrorTypes:      stats.ErrorTypes,
+			APIStats:        common.APIStatsFromProto(stats.ApiStats),
 		}
 
 		// 计算成功率

@@ -46,6 +46,13 @@ type StatsBuffer struct {
 	// backlog 断线期间待补报的统计批次（FIFO，上限 maxStatsBacklog）
 	backlog   []*pb.StatsData
 	backlogMu syncx.Locker
+
+	// lastFlush 上一次刷新的时刻，用于算出本窗口的真实秒数
+	//
+	// 定时任务是 1 秒一次，但缓冲区满时会提前刷。此前 QPS 直接取
+	// 「本批条数」，等同于假定窗口恒为 1 秒：maxSize=1000 时一个 50ms
+	// 就被填满的批次会报成 1000 QPS，真实值是它的二十倍
+	lastFlush time.Time
 }
 
 // NewStatsBuffer 创建统计缓冲区
@@ -57,6 +64,7 @@ func NewStatsBuffer(slaveID string, maxSize int, log logger.ILogger) *StatsBuffe
 		maxSize:     maxSize,
 		streamMu:    syncx.NewLock(),
 		backlogMu:   syncx.NewLock(),
+		lastFlush:   time.Now(),
 		logger:      log,
 		taskManager: syncx.NewPeriodicTaskManager(),
 	}
@@ -115,10 +123,15 @@ func (sb *StatsBuffer) Flush() error {
 	copy(toSend, sb.buffer)
 	sb.buffer = sb.buffer[:0]
 	taskID := sb.taskID
+	// 窗口秒数与缓冲区在同一把锁内快照：提前刷新与定时刷新可能并发，
+	// 在锁外读 lastFlush 会让两个批次算出重叠的窗口
+	now := time.Now()
+	windowSec := now.Sub(sb.lastFlush).Seconds()
+	sb.lastFlush = now
 	sb.bufferMu.Unlock()
 
 	// 聚合数据
-	stats := sb.aggregate(toSend, taskID)
+	stats := sb.aggregate(toSend, taskID, windowSec)
 
 	// 没有 taskID 的数据无法归属任务，不上报也不进积压
 	if taskID == "" {
@@ -225,6 +238,8 @@ func (sb *StatsBuffer) buildStatsData(stats *common.SlaveStats) *pb.StatsData {
 		P99Latency:      stats.P99Latency,
 		Qps:             stats.QPS,
 		StatusCodes:     statusCodes,
+		ErrorTypes:      stats.ErrorTypes,
+		ApiStats:        common.APIStatsToProto(stats.APIStats),
 	}
 }
 
@@ -290,8 +305,8 @@ func (sb *StatsBuffer) CloseStream() error {
 	return nil
 }
 
-// aggregate 聚合统计数据
-func (sb *StatsBuffer) aggregate(results []*types.RequestResult, taskID string) *common.SlaveStats {
+// aggregate 聚合统计数据；windowSec 为本批所覆盖的秒数
+func (sb *StatsBuffer) aggregate(results []*types.RequestResult, taskID string, windowSec float64) *common.SlaveStats {
 	stats := &common.SlaveStats{
 		SlaveID:     sb.slaveID,
 		TaskID:      taskID,
@@ -336,8 +351,15 @@ func (sb *StatsBuffer) aggregate(results []*types.RequestResult, taskID string) 
 	if stats.TotalRequests > 0 {
 		stats.SuccessRate = float64(stats.SuccessRequests) / float64(stats.TotalRequests) * 100
 	}
-	stats.QPS = float64(stats.TotalRequests)
+	// 按真实窗口秒数折算，而不是拿条数当 QPS（理由见 lastFlush 字段注释）
+	// 窗口非正只可能是时钟回拨，此时宁可留空也不报一个荒谬的数
+	if windowSec > 0 {
+		stats.QPS = float64(stats.TotalRequests) / windowSec
+	}
 	stats.TotalQPS = stats.QPS
+
+	// 按 API 名聚合：Master 侧的 API 汇总与下钻全靠这一层
+	stats.APIStats = common.AggregateAPIStats(results, windowSec)
 
 	return stats
 }

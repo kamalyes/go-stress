@@ -59,6 +59,9 @@ func NewHTTPServer(master *Master, port int, log logger.ILogger) *HTTPServer {
 	// 实时报告页面（展示聚合数据）
 	mux.HandleFunc("/realtime", hs.handleRealtime)
 	mux.HandleFunc("/api/realtime/stats", hs.handleRealtimeStats)
+	// /stream 是 report.js 在实时模式下唯一的取数通道，必须与 Slave 的
+	// 实时服务器同名同形，否则同一份前端在 Master 上就是一张死页面
+	mux.HandleFunc("/stream", hs.handleStream)
 	mux.HandleFunc("/api/details", hs.handleDetails)
 
 	// 静态资源路由（用于实时报告页面）
@@ -479,70 +482,102 @@ func (hs *HTTPServer) handleRealtime(w http.ResponseWriter, r *http.Request) {
 	w.Write(htmlBytes)
 }
 
+// realtimePayloadFor 按 slave_id / task_id 取当下的实时数据
+//
+// /stream 与 /api/realtime/stats 都走这里：两个端点喂的是同一份前端，
+// 一旦各自取数，字段迟早会对不上
+func (hs *HTTPServer) realtimePayloadFor(slaveID, taskID string) (*RealtimePayload, bool) {
+	stats := hs.master.GetCollector().GetAggregatedStats()
+
+	if slaveID != "" {
+		slaveStats, ok := stats.BySlave[slaveID]
+		if !ok {
+			return nil, false
+		}
+		return NewRealtimePayloadFromSlave(slaveStats, slaveID, taskID), true
+	}
+	return NewRealtimePayloadFromAggregated(stats, taskID), true
+}
+
 // handleRealtimeStats 处理实时统计数据API
 func (hs *HTTPServer) handleRealtimeStats(w http.ResponseWriter, r *http.Request) {
-	// 解析查询参数
+	query := r.URL.Query()
+	slaveID := query.Get("slave_id")
+
+	payload, ok := hs.realtimePayloadFor(slaveID, query.Get("task_id"))
+	if !ok {
+		hs.writeJSON(w, http.StatusNotFound, map[string]interface{}{
+			"error": fmt.Sprintf("Slave %s not found", slaveID),
+		})
+		return
+	}
+	hs.writeJSON(w, http.StatusOK, payload)
+}
+
+// handleStream 以 SSE 推送实时数据
+//
+// report.js 在实时模式下只认 EventSource("/stream")，Slave 的实时服务器
+// 一直提供着这个路由，而 Master 没有：于是 Master 的 /realtime 页面连上就是
+// 404，前端按 5 秒一次无限重连，指标恒为 0、明细恒为「加载中」。
+// 页面是同一份、CSS 和 JS 也都由 Master 正常提供，唯独少了这个取数端点
+//
+// 与 Slave 的实现有一处不同：Slave 侧有一组订阅者通道，由采集侧主动广播；
+// Master 这边数据本就在自己的 Collector 里，直接按秒取一次即可，
+// 不必为此再维护一套订阅关系
+func (hs *HTTPServer) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	query := r.URL.Query()
 	slaveID := query.Get("slave_id")
 	taskID := query.Get("task_id")
 
-	// 从 Master Collector 获取聚合统计数据
-	stats := hs.master.GetCollector().GetAggregatedStats()
+	// push 取一次数并推给客户端；返回 false 表示连接已不可用，循环应退出
+	push := func() bool {
+		payload, found := hs.realtimePayloadFor(slaveID, taskID)
+		if !found {
+			// Slave 尚未上报过（刚注册、或任务还没开跑）不是错误，
+			// 推一个空载荷让页面先把骨架画出来，而不是让它一直重连
+			payload = &RealtimePayload{SlaveID: slaveID, TaskID: taskID}
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			hs.logger.WarnKV("Failed to marshal realtime payload", "error", err)
+			return true // 单次序列化失败不该掐断整条流
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
 
-	// 如果指定了 slave_id，只返回该 Slave 的数据
-	if slaveID != "" {
-		if slaveStats, ok := stats.BySlave[slaveID]; ok {
-			response := map[string]interface{}{
-				"total_requests":   slaveStats.TotalRequests,
-				"success_requests": slaveStats.SuccessRequests,
-				"failed_requests":  slaveStats.FailedRequests,
-				"success_rate":     slaveStats.SuccessRate,
-				"qps":              slaveStats.QPS,
-				"avg_latency":      slaveStats.AvgLatency,
-				"min_latency":      slaveStats.MinLatency,
-				"max_latency":      slaveStats.MaxLatency,
-				"p50_latency":      slaveStats.P50Latency,
-				"p90_latency":      slaveStats.P90Latency,
-				"p95_latency":      slaveStats.P95Latency,
-				"p99_latency":      slaveStats.P99Latency,
-				"status_codes":     slaveStats.StatusCodes,
-				"errors":           slaveStats.ErrorTypes,
-				"total_agents":     1,
-				"slave_id":         slaveID,
-				"task_id":          taskID,
+	// 先推一帧，页面不必等满一个周期才有内容
+	if !push() {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if !push() {
+				return
 			}
-			hs.writeJSON(w, http.StatusOK, response)
-			return
-		} else {
-			hs.writeJSON(w, http.StatusNotFound, map[string]interface{}{
-				"error": fmt.Sprintf("Slave %s not found", slaveID),
-			})
-			return
 		}
 	}
-
-	// 返回聚合数据
-	response := map[string]interface{}{
-		"total_requests":   stats.TotalRequests,
-		"success_requests": stats.SuccessRequests,
-		"failed_requests":  stats.FailedRequests,
-		"success_rate":     stats.SuccessRate,
-		"qps":              stats.TotalQPS,
-		"avg_latency":      stats.AvgLatency,
-		"min_latency":      stats.MinLatency,
-		"max_latency":      stats.MaxLatency,
-		"p50_latency":      stats.P50Latency,
-		"p90_latency":      stats.P90Latency,
-		"p95_latency":      stats.P95Latency,
-		"p99_latency":      stats.P99Latency,
-		"status_codes":     stats.StatusCodes,
-		"errors":           stats.ErrorTypes,
-		"total_agents":     stats.TotalAgents,
-		"by_slave":         stats.BySlave,
-		"task_id":          taskID,
-	}
-
-	hs.writeJSON(w, http.StatusOK, response)
 }
 
 // handleDetails 处理请求详情查询（从 Slave 节点获取）
@@ -634,7 +669,7 @@ func (hs *HTTPServer) handleReportCSS(w http.ResponseWriter, r *http.Request) {
 // handleReportJS 提供实时报告的 JS 文件
 func (hs *HTTPServer) handleReportJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Write([]byte(statistics.GetReportJS()))
+	w.Write([]byte(statistics.RealtimeReportJS()))
 }
 
 // handleReportActionsJS 提供实时报告的操作 JS 文件

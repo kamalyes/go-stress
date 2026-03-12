@@ -239,6 +239,13 @@ func (s *SlaveServiceServer) GetRequestDetails(ctx context.Context, req *pb.Deta
 			ResponseBody:    d.ResponseBody,
 			ResponseHeaders: d.ResponseHeaders,
 			ExtractedVars:   d.ExtractedVars,
+
+			// 追踪 ID 与验证明细此前没带过来，于是 Master 的下钻只能看到
+			// 「失败了」，看不到追踪线索，也看不到哪条断言没过
+			TraceId:           d.TraceID,
+			ServerTraceId:     d.ServerTraceID,
+			ServerTraceHeader: d.ServerTraceHeader,
+			Verifications:     common.VerificationsToProto(d.Verifications),
 		})
 	}
 

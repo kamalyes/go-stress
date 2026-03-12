@@ -10,7 +10,10 @@
  */
 package statistics
 
-import _ "embed"
+import (
+	_ "embed"
+	"strings"
+)
 
 // FaviconSVG 通用 Favicon SVG 图标
 const FaviconSVG = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='grad' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' style='stop-color:%23667eea;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%23764ba2;stop-opacity:1' /%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='20' fill='url(%23grad)'/%3E%3Cpath d='M30 55 L45 70 L70 30' stroke='white' stroke-width='8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3Cpath d='M25 30 L35 30 M65 70 L75 70 M30 25 L30 35 M70 65 L70 75' stroke='%2338ef7d' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E`
@@ -110,9 +113,26 @@ func GetReportCSS() string {
 	return reportCSS
 }
 
-// GetReportJS 返回实时报告的 JS 内容
+// GetReportJS 返回未做占位符替换的原始 JS 内容
+//
+// 直接把它当实时报告的脚本发出去是错的：report.js 靠
+// IS_REALTIME_PLACEHOLDER 判断自己跑在实时还是静态模式，不替换的话
+// 浏览器里那是个未声明的标识符，typeof 为 "undefined"，于是 isRealtime
+// 恒为 false —— 页面退回静态模式去 fetch 一个并不存在的 index.json，
+// 指标恒为 0、明细恒为「加载中」，而且不报任何错
+//
+// 实时页面请用 RealtimeReportJS
 func GetReportJS() string {
 	return reportJS
+}
+
+// RealtimeReportJS 返回已切到实时模式的 JS 内容
+//
+// Master 与 Slave 的实时服务器都必须走这里：占位符替换此前在 Slave 侧
+// 是内联写的，Master 侧则整个漏掉了，同一份前端在两处行为不同
+func RealtimeReportJS() string {
+	js := strings.ReplaceAll(reportJS, "IS_REALTIME_PLACEHOLDER", "true")
+	return strings.ReplaceAll(js, "JSON_FILENAME_PLACEHOLDER", "")
 }
 
 // GetReportActionsJS 返回实时报告的操作 JS 内容
