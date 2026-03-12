@@ -203,8 +203,7 @@ window.togglePause = function() {
   const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
   const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
   
-  fetch(endpoint, { method: 'POST' })
-    .then(response => response.json())
+  postControl(endpoint)
     .then(data => {
       if (data.success) {
         isPaused = !isPaused;
@@ -216,9 +215,14 @@ window.togglePause = function() {
         statusText.textContent = status.statusText;
         statusDot.style.background = status.statusDot.bg;
         statusDot.style.animation = status.statusDot.animation;
+      } else {
+        alert(data.message || '操作未生效');
       }
     })
-    .catch(err => console.error('控制操作失败:', err));
+    .catch(err => {
+      console.error('控制操作失败:', err);
+      alert('控制操作失败: ' + err.message);
+    });
 };
 
 window.stopMonitoring = function() {
@@ -231,8 +235,7 @@ window.stopMonitoring = function() {
   const statusText = document.getElementById(ELEMENT_IDS.STATUS_TEXT);
   const statusDot = document.getElementById(ELEMENT_IDS.STATUS_DOT);
   
-  fetch(API_ENDPOINTS.STOP, { method: 'POST' })
-    .then(response => response.json())
+  postControl(API_ENDPOINTS.STOP)
     .then(data => {
       if (data.success) {
         stopBtn.disabled = true;
@@ -242,11 +245,39 @@ window.stopMonitoring = function() {
         statusText.textContent = CONTROL_STATUS.STOPPED.statusText;
         statusDot.style.background = CONTROL_STATUS.STOPPED.statusDot.bg;
         statusDot.style.animation = CONTROL_STATUS.STOPPED.statusDot.animation;
-        alert('压测已停止！');
+        alert(data.message || '压测已停止');
+      } else {
+        alert(data.message || '停止未生效');
       }
     })
-    .catch(err => console.error('停止失败:', err));
+    .catch(err => {
+      console.error('停止失败:', err);
+      alert('停止失败: ' + err.message);
+    });
 };
+
+// postControl 发起一次控制请求并归一化返回值
+//
+// 原先两处都是 fetch(...).then(r => r.json())，而失败时服务端返回的是
+// http.Error 的纯文本，r.json() 直接抛异常落进 catch，catch 里只有
+// console.error —— 点下去页面毫无反应，使用者无从知道发生了什么
+// 分布式模式下 Master 此前连这三个路由都没注册，必然 404，全程静默
+function postControl(endpoint) {
+  return fetch(endpoint, { method: 'POST' }).then(function (response) {
+    return response
+      .json()
+      .catch(function () {
+        // 非 JSON 响应（404 的纯文本等）转成同样形状，调用方只看 success
+        return { success: false, message: 'HTTP ' + response.status + ' ' + response.statusText };
+      })
+      .then(function (data) {
+        if (typeof data.success === 'undefined') {
+          data.success = response.ok;
+        }
+        return data;
+      });
+  });
+}
 
 // 处理文件选择
 window.handleFileSelect = function (event) {
@@ -1381,16 +1412,38 @@ function formatCodeBlock(content, label) {
     '</pre></div></div>';
 }
 
+// REQUEST_STORE_LIMIT 请求数据暂存的条数上限
+//
+// 这份暂存只服务于「复制为 curl」「重放」这类按钮，而按钮只可能作用在
+// 当前看得见的行上，几百条绰绰有余
+const REQUEST_STORE_LIMIT = 500;
+const requestStoreOrder = [];
+
+// rememberRequest 暂存一条请求数据，超出上限时淘汰最旧的
+//
+// 原先是直接 window.requestDataStore[reqId] = req，键是每次渲染新取的随机串，
+// 且从不删除。实时模式每秒重渲染一整页明细，一页 20 行就是每秒 20 条新条目，
+// 每条还挂着完整的响应体 —— 跑一小时攒下七万多条，页面越开越卡
+function rememberRequest(reqId, req) {
+  if (!window.requestDataStore) {
+    window.requestDataStore = {};
+  }
+  if (!(reqId in window.requestDataStore)) {
+    requestStoreOrder.push(reqId);
+  }
+  window.requestDataStore[reqId] = req;
+  while (requestStoreOrder.length > REQUEST_STORE_LIMIT) {
+    delete window.requestDataStore[requestStoreOrder.shift()];
+  }
+}
+
 function generateDetailContent(req) {
   const tabId = 'tab-' + Math.random().toString(36).substr(2, 9);
   const reqId = 'req-' + Math.random().toString(36).substr(2, 9);
   const menuId = 'menu-' + reqId;
   
   // 将请求数据保存到全局变量供按钮使用（在生成HTML之前）
-  if (!window.requestDataStore) {
-    window.requestDataStore = {};
-  }
-  window.requestDataStore[reqId] = req;
+  rememberRequest(reqId, req);
   
   let html = '<div class="detail-tabs-container">';
   

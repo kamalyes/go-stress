@@ -331,7 +331,10 @@ func (sb *StatsBuffer) aggregate(results []*types.RequestResult, taskID string, 
 				stats.ErrorTypes[r.Error.Error()]++
 			}
 		}
-		latencies = append(latencies, float64(r.Duration.Milliseconds()))
+		// 用纳秒换算而非 Duration.Milliseconds()：后者向下取整到整毫秒，
+		// 亚毫秒的请求全部变成 0 —— 快接口的 MinLatency、P50 会恒为 0ms，
+		// 而 Slave 自己的 Collector 报的是浮点毫秒，两边对不上
+		latencies = append(latencies, float64(r.Duration.Nanoseconds())/1e6)
 		stats.StatusCodes[r.StatusCode]++
 	}
 

@@ -62,6 +62,12 @@ func NewHTTPServer(master *Master, port int, log logger.ILogger) *HTTPServer {
 	// /stream 是 report.js 在实时模式下唯一的取数通道，必须与 Slave 的
 	// 实时服务器同名同形，否则同一份前端在 Master 上就是一张死页面
 	mux.HandleFunc("/stream", hs.handleStream)
+	// 报告页顶部的暂停/停止按钮打的是这三个固定路径（见 report.js 的
+	// API_ENDPOINTS）。Master 原先一个都没注册，点下去是 404；
+	// 而前端对 404 只有 console.error，用户侧完全静默
+	mux.HandleFunc("/api/stop", hs.handleReportStop)
+	mux.HandleFunc("/api/pause", hs.handleReportPauseUnsupported)
+	mux.HandleFunc("/api/resume", hs.handleReportPauseUnsupported)
 	mux.HandleFunc("/api/details", hs.handleDetails)
 
 	// 静态资源路由（用于实时报告页面）
@@ -512,6 +518,63 @@ func (hs *HTTPServer) handleRealtimeStats(w http.ResponseWriter, r *http.Request
 		return
 	}
 	hs.writeJSON(w, http.StatusOK, payload)
+}
+
+// handleReportStop 报告页「停止」按钮：停掉当前任务
+//
+// 前端只按 data.success 判断成败，所以无论成功失败都回 JSON 并带上
+// message，否则失败时页面什么都不显示
+func (hs *HTTPServer) handleReportStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		hs.writeJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
+			"success": false,
+			"message": "请用 POST",
+		})
+		return
+	}
+
+	taskID := r.URL.Query().Get("task_id")
+	if taskID == "" {
+		// 报告页是以 ?task_id= 打开的，但 fetch 时没带上查询串，
+		// 故兜底取「当前正在运行的那个任务」，单任务场景下即为用户所指
+		if running := hs.master.GetTaskQueue().GetRunning(); len(running) == 1 {
+			taskID = running[0].ID
+		}
+	}
+	if taskID == "" {
+		hs.writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success": false,
+			"message": "无法确定要停止哪个任务，请在分布式面板的任务列表里操作",
+		})
+		return
+	}
+
+	if err := hs.master.StopTask(taskID); err != nil {
+		hs.writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("停止任务失败: %v", err),
+		})
+		return
+	}
+
+	hs.logger.InfoKV("Task stopped from report page", "task_id", taskID)
+	hs.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "任务已停止",
+		"task_id": taskID,
+	})
+}
+
+// handleReportPauseUnsupported 暂停/恢复在 Master 侧没有对应能力
+//
+// 暂停是 Slave 实时服务器上的本地开关，Master 并不持有那个开关，
+// 也没有对应的 gRPC 指令。明确答复好过 404 —— 前端能把原因显示出来
+func (hs *HTTPServer) handleReportPauseUnsupported(w http.ResponseWriter, r *http.Request) {
+	hs.writeJSON(w, http.StatusNotImplemented, map[string]interface{}{
+		"success": false,
+		"message": "分布式模式下不支持暂停，Master 只能停止整个任务；" +
+			"如需暂停单个节点，请打开该 Slave 自己的实时报告页",
+	})
 }
 
 // handleStream 以 SSE 推送实时数据

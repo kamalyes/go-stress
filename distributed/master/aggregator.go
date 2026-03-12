@@ -36,7 +36,6 @@ type TaskAggregation struct {
 	TotalRequests   int64
 	SuccessRequests int64
 	FailedRequests  int64
-	Latencies       []float64
 	StatusCodes     map[int]int64
 	ErrorTypes      map[string]int64
 
@@ -70,7 +69,6 @@ func (da *DataAggregator) Add(stats *common.SlaveStats) {
 				SlaveStats:  make(map[string]*common.SlaveStats),
 				StatusCodes: make(map[int]int64),
 				ErrorTypes:  make(map[string]int64),
-				Latencies:   make([]float64, 0),
 				APIStats:    make(map[string]*statistics.APIStat),
 			}
 			da.taskData[taskID] = agg

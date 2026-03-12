@@ -23,8 +23,7 @@ import (
 type StatsCollector struct {
 	mu         *syncx.RWLock // 使用 syncx.RWLock 替代 sync.RWMutex
 	buffer     chan *common.SlaveStats
-	cache      map[string]*common.SlaveStats            // slave_id -> stats
-	taskStats  map[string]map[string]*common.SlaveStats // task_id -> slave_id -> stats
+	cache      map[string]*common.SlaveStats // slave_id -> stats
 	bufferSize int
 	aggregator *DataAggregator
 	logger     logger.ILogger
@@ -36,7 +35,6 @@ func NewStatsCollector(bufferSize int, log logger.ILogger) *StatsCollector {
 		mu:         syncx.NewRWLock(),
 		buffer:     make(chan *common.SlaveStats, bufferSize),
 		cache:      make(map[string]*common.SlaveStats),
-		taskStats:  make(map[string]map[string]*common.SlaveStats),
 		bufferSize: bufferSize,
 		aggregator: NewDataAggregator(),
 		logger:     log,
@@ -101,20 +99,25 @@ func (sc *StatsCollector) GetAllStats() map[string]*common.SlaveStats {
 	})
 }
 
-// GetTaskStats 获取指定任务的统计数据
+// GetTaskStats 获取指定任务下各 Slave 的统计数据
+//
+// 原先读的是一个名为 taskStats 的 map，而那个 map 只在构造与 Clear 时被赋值，
+// processStats 从不往里写 —— 于是这个方法无论传什么 taskID 都返回空 map，
+// 既不报错也无从察觉。按任务分组的数据本就在聚合器里，直接取它
 func (sc *StatsCollector) GetTaskStats(taskID string) map[string]*common.SlaveStats {
-	return syncx.WithRLockReturnValue(sc.mu, func() map[string]*common.SlaveStats {
-		stats, exists := sc.taskStats[taskID]
-		if !exists {
-			return make(map[string]*common.SlaveStats)
-		}
+	if sc.aggregator == nil {
+		return map[string]*common.SlaveStats{}
+	}
+	agg, ok := sc.aggregator.GetAggregation(taskID)
+	if !ok || agg == nil {
+		return map[string]*common.SlaveStats{}
+	}
 
-		result := make(map[string]*common.SlaveStats, len(stats))
-		for k, v := range stats {
-			result[k] = v
-		}
-		return result
-	})
+	result := make(map[string]*common.SlaveStats, len(agg.BySlave))
+	for id, stats := range agg.BySlave {
+		result[id] = stats
+	}
+	return result
 }
 
 // Clear 清空缓存
@@ -123,7 +126,6 @@ func (sc *StatsCollector) Clear() {
 	defer sc.mu.Unlock()
 
 	sc.cache = make(map[string]*common.SlaveStats)
-	sc.taskStats = make(map[string]map[string]*common.SlaveStats)
 }
 
 // GetAggregator 获取聚合器
