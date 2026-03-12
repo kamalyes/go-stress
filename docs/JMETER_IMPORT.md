@@ -79,6 +79,8 @@ go-stress -jmx plan.jmx -jmx-allow-lossy
 
 `path` 本身已是完整 URL 时直接采用
 
+原始请求体按原文保留首尾空白、换行和 CRLF，全空白报文也不会被当成空请求体丢弃。
+
 **HTTP 请求默认值**（`ConfigTestElement` / HttpDefaultsGui）同样支持：真实脚本极常把域名、端口、协议统一写在这里、采样器只填 path，默认值只填补采样器留空的字段，不做前缀拼接，与 JMeter 行为一致；其 `response_timeout` 映射为 `timeout`
 
 ### 定时器
@@ -121,6 +123,8 @@ go-stress 目前只支持一个数据源，脚本里有多个 `CSVDataSet` 时�
 | `DurationAssertion` | `RESPONSE_TIME`（`lte`） |
 | `SizeAssertion` | `RESPONSE_SIZE`（按 `operator` 取 `eq`/`ne`/`gt`/`lt`/`gte`/`lte`） |
 
+`RESPONSE_TIME` 按客户端测得的实际耗时比较，单位为毫秒，保留小数精度；HTTP 耗时包含响应体读取，不只计到收到响应头。
+
 JMeter 的匹配方式是位掩码（`MATCH=1 CONTAINS=2 NOT=4 EQUALS=8 SUBSTRING=16 OR=32`），逐位解析
 
 不支持的组合会记 WARN 并跳过该条：「响应体全文相等」与「不匹配正则」没有对应的验证类型；多个期望值以「或」组合时逐条转换，于是校验会比脚本更严格（go-stress 的多条验证之间是「与」）
@@ -131,8 +135,15 @@ JMeter 的匹配方式是位掩码（`MATCH=1 CONTAINS=2 NOT=4 EQUALS=8 SUBSTRIN
 |:-------|:----------|
 | `JSONPostProcessor` | `extractors` 型 `JSONPATH`（支持一个元素声明多个变量，分号分隔） |
 | `RegexExtractor` | `extractors` 型 `REGEX` |
+| `BoundaryExtractor` | `extractors` 型 `BOUNDARY`，保留字面左右边界 |
 
-`defaultValues` 映射为 `default`；`RegexExtractor.template` 非 `$1$` 或 `useHeaders` 非 false 时记 WARN 并按默认行为处理
+`defaultValues` 映射为 `default`；`RegexExtractor.template` 非 `$1$` 时记 WARN，只提取第一个捕获组
+
+正则与边界提取器支持正整数 match_number，指定第 N 次匹配
+JMeter 的 0 表示随机匹配，负数表示提取全部，二者与原生配置的默认值语义不同；导入遇到这些值、动态序号、非响应正文提取源或非主样本作用域时记 WARN 并跳过该提取器
+边界包含动态变量或函数时同样会提示并跳过；静态边界和默认值的首尾空白、换行原样保留
+导出会写明正整数匹配序号；原生 request 来源没有等价的响应后置处理器，会提示并跳过；transforms 管道无法复现时提示导出只保留原始提取
+新增边界字段与示例见[配置参考](CONFIG_FILE.md#左右边界提取)，匹配语义参考 [JMeter Boundary Extractor](https://jmeter.apache.org/usermanual/component_reference.html#Boundary_Extractor)
 
 ### 变量与参数化
 
@@ -262,7 +273,7 @@ go-stress -config plan.yaml -jmx-export plan.jmx
 | `timeout` | 每个采样器的 `HTTPSampler.response_timeout` |
 | `apis[]` | 逐个 HTTPSamplerProxy，按配置顺序排列 |
 | `verify` | ResponseAssertion / JSONPathAssertion / DurationAssertion / SizeAssertion |
-| `extractors` | JSONPostProcessor / RegexExtractor |
+| `extractors` | JSONPostProcessor / RegexExtractor / BoundaryExtractor |
 | `{{.var}}`、内置函数 | `${var}`、`${__UUID()}` 等（见下表） |
 
 **没有对应物、会被报出来的：**

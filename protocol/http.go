@@ -141,7 +141,6 @@ func (h *HTTPClient) Send(ctx context.Context, req *types.Request) (*types.Respo
 
 	// 执行请求
 	httpResp, err := httpReq.Send()
-	duration := time.Since(startTime)
 
 	// 解析Query参数
 	var queryString string
@@ -151,7 +150,7 @@ func (h *HTTPClient) Send(ctx context.Context, req *types.Request) (*types.Respo
 
 	if err != nil {
 		return &types.Response{
-			Duration:       duration,
+			Duration:       time.Since(startTime),
 			Error:          fmt.Errorf("HTTP请求失败: %w", err),
 			RequestURL:     req.URL,
 			RequestMethod:  req.Method,
@@ -163,6 +162,8 @@ func (h *HTTPClient) Send(ctx context.Context, req *types.Request) (*types.Respo
 
 	// 读取响应体 - httpx.Response.Body() 返回 ([]byte, error)
 	body, err := httpResp.Body()
+	// Send 只等待响应头，完整响应耗时还必须包含响应体下载，包括读取失败的等待。
+	duration := time.Since(startTime)
 	if err != nil {
 		return &types.Response{
 			StatusCode:     httpResp.StatusCode,

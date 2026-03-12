@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"text/template"
 
 	"github.com/kamalyes/go-logger"
@@ -86,8 +87,9 @@ func (e *JSONPathExtractor) getBody(ctx *ExtractorContext) ([]byte, error) {
 // ======================== 正则表达式提取器 ========================
 
 type RegexExtractor struct {
-	pattern *regexp.Regexp
-	source  config.ExtractorSource
+	pattern     *regexp.Regexp
+	source      config.ExtractorSource
+	matchNumber int
 }
 
 func NewRegexExtractor(pattern string, source config.ExtractorSource) (*RegexExtractor, error) {
@@ -98,7 +100,7 @@ func NewRegexExtractor(pattern string, source config.ExtractorSource) (*RegexExt
 	if source == "" {
 		source = config.ExtractorSourceResponse
 	}
-	return &RegexExtractor{pattern: re, source: source}, nil
+	return &RegexExtractor{pattern: re, source: source, matchNumber: 1}, nil
 }
 
 func (e *RegexExtractor) Extract(ctx *ExtractorContext) (string, error) {
@@ -107,7 +109,12 @@ func (e *RegexExtractor) Extract(ctx *ExtractorContext) (string, error) {
 		return "", fmt.Errorf("%s体为空", e.source)
 	}
 
-	matches := e.pattern.FindStringSubmatch(content)
+	var matches []string
+	if e.matchNumber <= 1 {
+		matches = e.pattern.FindStringSubmatch(content)
+	} else if all := e.pattern.FindAllStringSubmatch(content, e.matchNumber); len(all) == e.matchNumber {
+		matches = all[e.matchNumber-1]
+	}
 	if len(matches) < 2 {
 		return "", fmt.Errorf("正则表达式未匹配到数据")
 	}
@@ -116,13 +123,77 @@ func (e *RegexExtractor) Extract(ctx *ExtractorContext) (string, error) {
 }
 
 func (e *RegexExtractor) getContent(ctx *ExtractorContext) string {
-	if e.source == config.ExtractorSourceRequest && ctx.Request != nil {
+	if e.source == config.ExtractorSourceRequest {
+		if ctx.Request == nil {
+			return ""
+		}
 		return ctx.Request.Body
 	}
 	if ctx.Response != nil {
 		return string(ctx.Response.Body)
 	}
 	return ""
+}
+
+// BoundaryExtractor 按字面左右边界提取正文，不需要把分隔符转义成正则。
+type BoundaryExtractor struct {
+	left, right string
+	source      config.ExtractorSource
+	matchNumber int
+}
+
+func NewBoundaryExtractor(left, right string, source config.ExtractorSource, matchNumber int) (*BoundaryExtractor, error) {
+	if matchNumber < 0 {
+		return nil, fmt.Errorf("match_number 必须是正整数，或 0 表示默认第 1 次")
+	}
+	if matchNumber == 0 {
+		matchNumber = 1
+	}
+	if source == "" {
+		source = config.ExtractorSourceResponse
+	}
+	if source != config.ExtractorSourceRequest && source != config.ExtractorSourceResponse {
+		return nil, fmt.Errorf("边界提取器不支持 source=%q", source)
+	}
+	return &BoundaryExtractor{left: left, right: right, source: source, matchNumber: matchNumber}, nil
+}
+
+func (e *BoundaryExtractor) Extract(ctx *ExtractorContext) (string, error) {
+	var content string
+	if e.source == config.ExtractorSourceRequest {
+		if ctx.Request != nil {
+			content = ctx.Request.Body
+		}
+	} else if ctx.Response != nil {
+		content = string(ctx.Response.Body)
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("%s体为空", e.source)
+	}
+	for found, offset := 1, 0; offset <= len(content); found++ {
+		left := strings.Index(content[offset:], e.left)
+		if left < 0 {
+			break
+		}
+		start := offset + left + len(e.left)
+		end := len(content)
+		if e.right != "" {
+			right := strings.Index(content[start:], e.right)
+			if right < 0 {
+				break
+			}
+			end = start + right
+		}
+		if found == e.matchNumber {
+			return content[start:end], nil
+		}
+		// 与 JMeter 一致，从下一个左边界继续；空边界的结果只有一组。
+		if e.left == "" || e.right == "" {
+			break
+		}
+		offset = start
+	}
+	return "", fmt.Errorf("边界提取未找到第 %d 次匹配", e.matchNumber)
 }
 
 // ======================== Header 提取器 ========================
@@ -147,6 +218,11 @@ func (e *HeaderExtractor) Extract(ctx *ExtractorContext) (string, error) {
 
 	value, exists := headers[e.headerName]
 	if !exists {
+		for name, candidate := range headers {
+			if strings.EqualFold(name, e.headerName) {
+				return candidate, nil
+			}
+		}
 		return "", fmt.Errorf("Header [%s] 不存在", e.headerName)
 	}
 
@@ -154,7 +230,10 @@ func (e *HeaderExtractor) Extract(ctx *ExtractorContext) (string, error) {
 }
 
 func (e *HeaderExtractor) getHeaders(ctx *ExtractorContext) map[string]string {
-	if e.source == config.ExtractorSourceRequest && ctx.Request != nil {
+	if e.source == config.ExtractorSourceRequest {
+		if ctx.Request == nil {
+			return nil
+		}
 		return ctx.Request.Headers
 	}
 	if ctx.Response != nil {
@@ -314,7 +393,17 @@ func createExtractor(cfg config.ExtractorConfig) (Extractor, error) {
 		if cfg.Regex == "" {
 			return nil, fmt.Errorf("正则表达式不能为空")
 		}
-		return NewRegexExtractor(cfg.Regex, source)
+		if cfg.MatchNumber < 0 {
+			return nil, fmt.Errorf("match_number 必须是正整数，或 0 表示默认第 1 次")
+		}
+		extractor, err := NewRegexExtractor(cfg.Regex, source)
+		if err == nil && cfg.MatchNumber > 0 {
+			extractor.matchNumber = cfg.MatchNumber
+		}
+		return extractor, err
+
+	case types.ExtractorTypeBoundary:
+		return NewBoundaryExtractor(cfg.LeftBoundary, cfg.RightBoundary, source, cfg.MatchNumber)
 
 	case types.ExtractorTypeHeader:
 		if cfg.Header == "" {

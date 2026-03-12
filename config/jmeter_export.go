@@ -231,12 +231,20 @@ func (e *jmxExporter) checkUnmappable(apis []APIConfig) {
 		api := &apis[i]
 		for _, ex := range api.Extractors {
 			switch ex.Type {
-			case types.ExtractorTypeJSONPath, types.ExtractorTypeRegex, "":
+			case types.ExtractorTypeJSONPath, types.ExtractorTypeRegex, types.ExtractorTypeBoundary, "":
 				// 有对应元素
 			default:
 				e.report.drop(JMXDropWarn, "extractor", api.Name,
 					fmt.Sprintf("提取器 %q 的类型 %s 在 JMeter 里没有直接对应的后置处理器，已忽略",
 						ex.Name, ex.Type))
+			}
+			if ex.Source != "" && ex.Source != ExtractorSourceResponse {
+				e.report.drop(JMXDropWarn, "extractor", api.Name,
+					fmt.Sprintf("提取器 %q 的 source=%q 无法映射到响应后置处理器，已忽略", ex.Name, ex.Source))
+			}
+			if len(ex.Transforms) > 0 {
+				e.report.drop(JMXDropWarn, "extractor", api.Name,
+					fmt.Sprintf("提取器 %q 的 transforms 转换管道无对应元素，导出仅保留原始提取", ex.Name))
 			}
 		}
 		for _, v := range api.Verify {
@@ -713,6 +721,14 @@ func (e *jmxExporter) writeJSONPathAssertion(w *jmxWriter, v VerifyConfig, apiNa
 
 // emitExtractor 把提取器写成对应的后置处理器
 func (e *jmxExporter) emitExtractor(w *jmxWriter, ex ExtractorConfig, apiName string) {
+	if ex.Source != "" && ex.Source != ExtractorSourceResponse {
+		return
+	}
+	if (ex.Type == types.ExtractorTypeRegex || ex.Type == types.ExtractorTypeBoundary) && ex.MatchNumber < 0 {
+		e.report.drop(JMXDropWarn, "extractor", apiName,
+			fmt.Sprintf("提取器 %q 的 match_number=%d 非法，未导出", ex.Name, ex.MatchNumber))
+		return
+	}
 	switch ex.Type {
 	case types.ExtractorTypeJSONPath, "":
 		if ex.JSONPath == "" {
@@ -744,8 +760,22 @@ func (e *jmxExporter) emitExtractor(w *jmxWriter, ex ExtractorConfig, apiName st
 		w.prop("stringProp", "RegexExtractor.regex", ex.Regex)
 		w.prop("stringProp", "RegexExtractor.template", "$1$")
 		w.prop("stringProp", "RegexExtractor.default", ex.Default)
-		w.prop("stringProp", "RegexExtractor.match_number", "1")
+		w.prop("stringProp", "RegexExtractor.match_number", strconv.Itoa(max(ex.MatchNumber, 1)))
 		w.close("RegexExtractor")
+		w.emptyTree()
+
+	case types.ExtractorTypeBoundary:
+		w.open("BoundaryExtractor",
+			"guiclass", "BoundaryExtractorGui", "testclass", "BoundaryExtractor",
+			"testname", "边界提取器 "+ex.Name, "enabled", "true")
+		w.prop("stringProp", "BoundaryExtractor.useHeaders", "false")
+		w.prop("stringProp", "BoundaryExtractor.refname", ex.Name)
+		w.prop("stringProp", "BoundaryExtractor.lboundary", ex.LeftBoundary)
+		w.prop("stringProp", "BoundaryExtractor.rboundary", ex.RightBoundary)
+		w.prop("stringProp", "BoundaryExtractor.default", ex.Default)
+		w.prop("boolProp", "BoundaryExtractor.default_empty_value", "true")
+		w.prop("stringProp", "BoundaryExtractor.match_number", strconv.Itoa(max(ex.MatchNumber, 1)))
+		w.close("BoundaryExtractor")
 		w.emptyTree()
 	}
 }

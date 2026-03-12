@@ -107,15 +107,18 @@ type APIConfig struct {
 
 // ExtractorConfig 数据提取器配置
 type ExtractorConfig struct {
-	Name       string            `json:"name" yaml:"name"`                                 // 提取变量的名称
-	Source     ExtractorSource   `json:"source,omitempty" yaml:"source,omitempty"`         // 提取源：response(默认) | request
-	Type       ExtractorType     `json:"type,omitempty" yaml:"type,omitempty"`             // 提取类型：jsonpath(默认), regex, header, expression
-	JSONPath   string            `json:"jsonpath,omitempty" yaml:"jsonpath,omitempty"`     // JSONPath表达式（如：$.data.token）
-	Regex      string            `json:"regex,omitempty" yaml:"regex,omitempty"`           // 正则表达式
-	Header     string            `json:"header,omitempty" yaml:"header,omitempty"`         // 响应头名称
-	Expression string            `json:"expression,omitempty" yaml:"expression,omitempty"` // 表达式（如：{{.first_name}} {{.last_name}}）
-	Transforms []TransformConfig `json:"transforms,omitempty" yaml:"transforms,omitempty"` // 数据转换管道
-	Default    string            `json:"default,omitempty" yaml:"default,omitempty"`       // 默认值（提取失败时使用）
+	Name          string            `json:"name" yaml:"name"`                                         // 提取变量的名称
+	Source        ExtractorSource   `json:"source,omitempty" yaml:"source,omitempty"`                 // 提取源：response(默认) | request
+	Type          ExtractorType     `json:"type,omitempty" yaml:"type,omitempty"`                     // JSONPATH(默认), REGEX, BOUNDARY, HEADER, EXPRESSION
+	JSONPath      string            `json:"jsonpath,omitempty" yaml:"jsonpath,omitempty"`             // JSONPath表达式（如：$.data.token）
+	Regex         string            `json:"regex,omitempty" yaml:"regex,omitempty"`                   // 正则表达式
+	LeftBoundary  string            `json:"left_boundary,omitempty" yaml:"left_boundary,omitempty"`   // BOUNDARY 左边界，空串表示从正文开头
+	RightBoundary string            `json:"right_boundary,omitempty" yaml:"right_boundary,omitempty"` // BOUNDARY 右边界，空串表示到正文结尾
+	MatchNumber   int               `json:"match_number,omitempty" yaml:"match_number,omitempty"`     // REGEX / BOUNDARY 第几次匹配，0 表示默认第 1 次
+	Header        string            `json:"header,omitempty" yaml:"header,omitempty"`                 // 响应头名称
+	Expression    string            `json:"expression,omitempty" yaml:"expression,omitempty"`         // 表达式（如：{{.first_name}} {{.last_name}}）
+	Transforms    []TransformConfig `json:"transforms,omitempty" yaml:"transforms,omitempty"`         // 数据转换管道
+	Default       string            `json:"default,omitempty" yaml:"default,omitempty"`               // 默认值（提取失败时使用）
 }
 
 // ExtractorSource 提取源

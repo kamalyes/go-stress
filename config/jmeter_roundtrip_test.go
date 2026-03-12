@@ -1037,3 +1037,96 @@ func TestRoundTripNestedConverges(t *testing.T) {
 	_, d3 := cycle(c2, "n3.jmx")
 	assert.Equal(t, string(d2), string(d3), "第二轮与第三轮导出应完全一致")
 }
+
+// TestExportUsesOnlyKnownJMeterClasses 导出的每个 testclass / guiclass 都必须是 JMeter 认得的类别名
+//
+// JMeter 读 .jmx 时靠 XStream 按 bin/saveservice.properties 里的别名把 XML
+// 标签映射回具体的类。发出表外的名字，JMeter 直接打不开这份脚本 ——
+// 而最容易犯的正是这种错：新增一种元素时把 guiclass 拼错，导出看着一切正常，
+// 直到有人拿去 JMeter 里打开
+//
+// 本机没有 JMeter，这份清单是离线环境下能做的最接近的校验
+func TestExportUsesOnlyKnownJMeterClasses(t *testing.T) {
+	known := loadJMeterAliases(t)
+
+	// 覆盖面尽量铺开：各类断言、提取器、定时器、CSV、多接口都要出现在产物里
+	cfg := baseCfg()
+	cfg.ThinkTime = &ThinkTimeConfig{Type: ThinkTimeConstant, Delay: time.Second}
+	cfg.APIs = append(cfg.APIs,
+		APIConfig{Name: "b", URL: "http://h/b", Method: "GET",
+			ThinkTime: &ThinkTimeConfig{Type: ThinkTimeUniform, Delay: time.Second, Range: time.Second},
+			Verify: []VerifyConfig{
+				{Type: types.VerifyTypeContains, Operator: types.OpContains, Expect: "ok"},
+				{Type: types.VerifyTypeRegex, Expect: `\d+`},
+				{Type: types.VerifyTypeResponseTime, Operator: types.OpLTE, Expect: 800},
+				{Type: types.VerifyTypeResponseSize, Operator: types.OpGT, Expect: 10},
+			},
+			Extractors: []ExtractorConfig{
+				{Name: "sid", Type: types.ExtractorTypeRegex, Regex: `sid=(\w+)`},
+			}},
+		APIConfig{Name: "c", URL: "http://h/c", Method: "GET",
+			ThinkTime: &ThinkTimeConfig{Type: ThinkTimeGaussian, Delay: time.Second, Deviation: time.Second}},
+	)
+
+	data, _, err := ExportJMeterPlan(cfg)
+	require.NoError(t, err)
+
+	var root genericClassNode
+	require.NoError(t, xml.Unmarshal(data, &root))
+
+	seen := map[string]bool{}
+	var walk func(n genericClassNode)
+	walk = func(n genericClassNode) {
+		for _, attr := range []string{n.TestClass, n.GUIClass} {
+			if attr == "" {
+				continue
+			}
+			seen[attr] = true
+			assert.True(t, known[attr],
+				"%q 不在 JMeter 的类别名表里，JMeter 打不开这份脚本", attr)
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	walk(root)
+
+	// 确认这个用例真的扫到了东西，而不是因为产物为空而空过
+	require.Greater(t, len(seen), 10, "应该扫到十几种元素，否则用例没覆盖到什么")
+	for _, must := range []string{
+		"TestPlan", "ThreadGroup", "HTTPSamplerProxy", "LoopController",
+		"HeaderManager", "CSVDataSet", "ConstantThroughputTimer",
+		"ResponseAssertion", "JSONPathAssertion", "DurationAssertion", "SizeAssertion",
+		"JSONPostProcessor", "RegexExtractor",
+		"ConstantTimer", "UniformRandomTimer", "GaussianRandomTimer",
+		"HttpTestSampleGui", "ThreadGroupGui", "HeaderPanel",
+	} {
+		assert.True(t, seen[must], "产物里应出现 %s，否则该元素的类名没被校验到", must)
+	}
+}
+
+// genericClassNode 只取两个类名属性，用于遍历校验
+type genericClassNode struct {
+	XMLName   xml.Name
+	TestClass string             `xml:"testclass,attr"`
+	GUIClass  string             `xml:"guiclass,attr"`
+	Children  []genericClassNode `xml:",any"`
+}
+
+// loadJMeterAliases 读入 JMeter 的类别名清单
+func loadJMeterAliases(t *testing.T) map[string]bool {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "jmeter_aliases.txt"))
+	require.NoError(t, err)
+
+	known := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		known[line] = true
+	}
+	require.Greater(t, len(known), 200, "别名清单看起来不完整")
+	return known
+}

@@ -762,6 +762,10 @@ func (c *jmxConverter) buildAPI(n, tree *jmxNode, groupHeaders map[string]string
 			if e := c.readRegexExtractor(child); e != nil {
 				api.Extractors = append(api.Extractors, *e)
 			}
+		case "BoundaryExtractor":
+			if e := c.readBoundaryExtractor(child); e != nil {
+				api.Extractors = append(api.Extractors, *e)
+			}
 
 		case "ConstantTimer", "UniformRandomTimer", "GaussianRandomTimer":
 			if tt := c.readTimer(child); tt != nil {
@@ -870,7 +874,7 @@ func (c *jmxConverter) samplerBody(n *jmxNode) (string, bool) {
 	}
 
 	if n.propBool("HTTPSampler.postBodyRaw", false) {
-		raw := items[0].propString("Argument.value", "")
+		raw, _ := items[0].propRaw("Argument.value")
 		if raw == "" {
 			return "", false
 		}
@@ -1210,28 +1214,75 @@ func (c *jmxConverter) readJSONExtractors(n *jmxNode) []ExtractorConfig {
 // readRegexExtractor 转换正则提取器
 func (c *jmxConverter) readRegexExtractor(n *jmxNode) *ExtractorConfig {
 	name := n.propString("RegexExtractor.refname", "")
-	expr := n.propString("RegexExtractor.regex", "")
+	expr, _ := n.propRaw("RegexExtractor.regex")
 	if name == "" || expr == "" {
 		c.report.drop(JMXDropWarn, n.tag(), n.label(), "正则提取器缺少变量名或表达式，已忽略")
 		return nil
 	}
 
-	if field := n.propString("RegexExtractor.useHeaders", "false"); field != "false" {
-		c.report.drop(JMXDropWarn, n.tag(), n.label(),
-			fmt.Sprintf("提取源 useHeaders=%q 不受支持，已按响应体处理", field))
+	match, ok := c.readBodyExtractorOptions(n, 1)
+	if !ok {
+		return nil
 	}
 	if tpl := n.propString("RegexExtractor.template", "$1$"); tpl != "$1$" {
 		c.report.drop(JMXDropWarn, n.tag(), n.label(),
 			fmt.Sprintf("模板 %q 不受支持，只取第一个捕获组", tpl))
 	}
 
+	defaultValue, _ := n.propRaw("RegexExtractor.default")
 	return &ExtractorConfig{
-		Name:    name,
-		Type:    types.ExtractorTypeRegex,
-		Regex:   expr,
-		Source:  ExtractorSourceResponse,
-		Default: n.propString("RegexExtractor.default", ""),
+		Name:        name,
+		Type:        types.ExtractorTypeRegex,
+		Regex:       expr,
+		MatchNumber: match,
+		Source:      ExtractorSourceResponse,
+		Default:     defaultValue,
 	}
+}
+
+// readBodyExtractorOptions 只映射响应正文上的确定性匹配，无法等价转换的模式明确跳过。
+func (c *jmxConverter) readBodyExtractorOptions(n *jmxNode, defaultMatch int) (int, bool) {
+	if field := n.propString(n.tag()+".useHeaders", "false"); field != "false" {
+		c.report.drop(JMXDropWarn, n.tag(), n.label(),
+			fmt.Sprintf("提取源 useHeaders=%q 不受支持，该提取器已跳过", field))
+		return 0, false
+	}
+	if scope := n.propString("Sample.scope", "parent"); scope != "parent" {
+		c.report.drop(JMXDropWarn, n.tag(), n.label(),
+			fmt.Sprintf("提取作用域 %q 不受支持，该提取器已跳过", scope))
+		return 0, false
+	}
+	raw := n.propString(n.tag()+".match_number", strconv.Itoa(defaultMatch))
+	match, err := strconv.Atoi(raw)
+	if err != nil || match <= 0 {
+		c.report.drop(JMXDropWarn, n.tag(), n.label(),
+			fmt.Sprintf("match_number=%q 不支持；仅支持正整数第 N 次匹配，随机/全部/动态匹配已跳过", raw))
+		return 0, false
+	}
+	return match, true
+}
+
+func (c *jmxConverter) readBoundaryExtractor(n *jmxNode) *ExtractorConfig {
+	name := n.propString("BoundaryExtractor.refname", "")
+	if name == "" {
+		c.report.drop(JMXDropWarn, n.tag(), n.label(), "边界提取器缺少变量名，已忽略")
+		return nil
+	}
+	match, ok := c.readBodyExtractorOptions(n, 0)
+	if !ok {
+		return nil
+	}
+	left, _ := n.propRaw("BoundaryExtractor.lboundary")
+	right, _ := n.propRaw("BoundaryExtractor.rboundary")
+	if jmxVarPattern.MatchString(left+right) || hasJMeterFunc(left+right) {
+		c.report.drop(JMXDropWarn, n.tag(), n.label(), "动态边界不受支持，该提取器已跳过")
+		return nil
+	}
+	defaultValue, _ := n.propRaw("BoundaryExtractor.default")
+	c.report.addMapped("边界提取器「%s」→ BOUNDARY，第 %d 次匹配", name, match)
+	return &ExtractorConfig{Name: name, Type: types.ExtractorTypeBoundary,
+		LeftBoundary: left, RightBoundary: right, MatchNumber: match,
+		Source: ExtractorSourceResponse, Default: defaultValue}
 }
 
 // readTimeout 从元素上读超时并登记为候选，返回登记的时长（0 表示没有）
@@ -1338,7 +1389,6 @@ func (c *jmxConverter) dropUnknown(n *jmxNode) {
 		"XPathExtractor":        "XPath 提取器不受支持",
 		"XPath2Extractor":       "XPath2 提取器不受支持",
 		"HtmlExtractor":         "CSS/jQuery 提取器不受支持",
-		"BoundaryExtractor":     "边界提取器不受支持，可改写成正则提取器",
 		"DebugPostProcessor":    "调试后置处理器只产出调试信息，无需转换",
 		"DebugSampler":          "调试采样器不发真实请求",
 		"UserParameters":        "用户参数（按线程轮换的变量）不受支持，可改用 CSV 数据源",

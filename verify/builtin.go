@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	validator "github.com/kamalyes/go-argus"
 	"github.com/kamalyes/go-stress/config"
@@ -409,8 +410,6 @@ func (v *HTTPVerifier) verifyHeader(resp *Response) (bool, error) {
 
 // verifyResponseTime 验证响应时间（毫秒）
 func (v *HTTPVerifier) verifyResponseTime(resp *Response) (bool, error) {
-	// 从 resp.Duration 获取响应时间（如果有的话，需要在 Response 类型中添加）
-	// 这里假设响应时间已经记录在某个字段中
 	expectedTime, ok := v.config.Expect.(float64)
 	if !ok {
 		if intVal, ok := v.config.Expect.(int); ok {
@@ -433,9 +432,8 @@ func (v *HTTPVerifier) verifyResponseTime(resp *Response) (bool, error) {
 		operator = validator.OpLessThanOrEqual // 默认检查响应时间不超过期望值
 	}
 
-	// 注意：这里需要实际的响应时间，暂时使用占位值
-	// 实际使用时需要在 Response 结构中添加 Duration 字段
-	actualTime := 0.0 // TODO: 从 resp 中获取实际响应时间
+	// 使用客户端记录的实际耗时，并保留不足一毫秒的精度
+	actualTime := float64(resp.Duration) / float64(time.Millisecond)
 
 	compareResult := validator.CompareNumbers(actualTime, expectedTime, operator)
 	compareResult.Message = fmt.Sprintf("响应时间 %s", compareResult.Message)

@@ -326,7 +326,7 @@ apis:
 extractors:
   - name: token
     source: response  # response(默认) | request
-    type: JSONPATH    # JSONPATH(默认) | REGEX | HEADER | EXPRESSION
+    type: JSONPATH    # JSONPATH(默认) | REGEX | BOUNDARY | HEADER | EXPRESSION
     jsonpath: $.data.token
     default: ""
 ```
@@ -367,7 +367,29 @@ extractors:
     type: REGEX
     regex: 'session=([a-f0-9]+)'
     source: response  # 可从request或response提取
+    match_number: 2   # 第 2 次匹配的第一个捕获组；省略或 0 表示第 1 次
 ```
+
+#### 左右边界提取
+
+按字面字符串定位边界，不需要转义正则特殊字符；支持跨行正文。
+
+```yaml
+extractors:
+  - name: token
+    type: BOUNDARY
+    left_boundary: '<token>'
+    right_boundary: '</token>'
+    match_number: 2
+    source: response
+    default: NOT_FOUND
+```
+
+正文 `<token>first</token><token>second</token>` 会提取出 `second`。
+`source` 可以选 request 或 response；左边界为空表示从正文开头取，右边界为空表示取到正文结尾，两者为空时取整段正文。
+任一边界为空时只有一组结果，指定第 2 次及以后会按提取失败处理，使用已配置的 default。
+`REGEX` / `BOUNDARY` 的 match_number 省略或为 0 时取第 1 次，正整数指定第 N 次，负数不支持。
+提取结果仍可通过 transforms 转换，并通过 `{{.接口名.变量名}}` 供依赖接口引用。
 
 #### 响应头提取
 
@@ -384,6 +406,9 @@ extractors:
     type: HEADER
     header: Authorization
 ```
+
+Header 名称忽略大小写，如 `x-request-id` 与 `X-Request-ID` 等价
+source 为 request 时只读取请求；请求不存在不会回退到响应中取值
 
 #### 表达式提取（组合变量）
 

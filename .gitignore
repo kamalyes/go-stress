@@ -75,6 +75,7 @@ debug.test
 dist/
 build/
 bin/
+go-stress
 
 # Test cache
 .cache/

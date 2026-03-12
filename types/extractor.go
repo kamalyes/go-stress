@@ -16,6 +16,7 @@ type ExtractorType string
 const (
 	ExtractorTypeJSONPath   ExtractorType = "JSONPATH"   // JSONPath提取
 	ExtractorTypeRegex      ExtractorType = "REGEX"      // 正则表达式提取
+	ExtractorTypeBoundary   ExtractorType = "BOUNDARY"   // 左右边界之间的文本提取
 	ExtractorTypeHeader     ExtractorType = "HEADER"     // 响应头提取
 	ExtractorTypeExpression ExtractorType = "EXPRESSION" // 表达式提取
 )

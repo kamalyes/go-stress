@@ -47,5 +47,6 @@ const (
 	// 提取器类型
 	ExtractorTypeJSONPath = types.ExtractorTypeJSONPath
 	ExtractorTypeRegex    = types.ExtractorTypeRegex
+	ExtractorTypeBoundary = types.ExtractorTypeBoundary
 	ExtractorTypeHeader   = types.ExtractorTypeHeader
 )

@@ -73,6 +73,12 @@ var propTags = map[string]bool{
 }
 
 // prop 取某个 name 的属性值（直接子节点，去首尾空白）
+func (n *jmxNode) prop(name string) (string, bool) {
+	value, ok := n.propRaw(name)
+	return strings.TrimSpace(value), ok
+}
+
+// propRaw 读取原始属性值，保留请求体等数据中的首尾空白。
 //
 // JMeter 有两种序列化形式，必须都认：
 //
@@ -82,7 +88,7 @@ var propTags = map[string]bool{
 // 后者出现在 doubleProp / floatProp 上（ConstantThroughputTimer 的 throughput
 // 正是这种）。只认属性式会让这些值静默读不到——限速配置被当作"没填"而忽略，
 // 导入后按全速发压，这正是最危险的那类静默差异
-func (n *jmxNode) prop(name string) (string, bool) {
+func (n *jmxNode) propRaw(name string) (string, bool) {
 	for i := range n.Children {
 		c := &n.Children[i]
 		if !propTags[c.tag()] {
@@ -91,7 +97,7 @@ func (n *jmxNode) prop(name string) (string, bool) {
 
 		// 属性式
 		if c.Name == name {
-			return strings.TrimSpace(c.Text), true
+			return c.Text, true
 		}
 
 		// 嵌套式：键在 <name> 子节点，值在 <value> 子节点
@@ -111,7 +117,7 @@ func (n *jmxNode) nestedNameValue() (key, value string, ok bool) {
 		case "name":
 			key = strings.TrimSpace(n.Children[i].Text)
 		case "value":
-			value = strings.TrimSpace(n.Children[i].Text)
+			value = n.Children[i].Text
 			ok = true
 		}
 	}

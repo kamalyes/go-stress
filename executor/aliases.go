@@ -55,6 +55,7 @@ const (
 
 	ExtractorTypeJSONPath   = types.ExtractorTypeJSONPath
 	ExtractorTypeRegex      = types.ExtractorTypeRegex
+	ExtractorTypeBoundary   = types.ExtractorTypeBoundary
 	ExtractorTypeHeader     = types.ExtractorTypeHeader
 	ExtractorTypeExpression = types.ExtractorTypeExpression
 	// 存储模式

@@ -13,15 +13,19 @@ package protocol
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kamalyes/go-stress/config"
 	"github.com/kamalyes/go-stress/types"
+	"github.com/kamalyes/go-stress/verify"
+	"github.com/kamalyes/go-toolbox/pkg/httpx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -175,4 +179,69 @@ func TestHTTPClientRespectsContextTimeout(t *testing.T) {
 
 	require.Error(t, err, "超过 Timeout 应当报错而非静候服务端")
 	assert.Less(t, elapsed, 400*time.Millisecond, "应在约 100ms 处失败，实际耗时 %s", elapsed)
+}
+
+type durationRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f durationRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type delayedResponseBody struct {
+	reader *strings.Reader
+	delay  time.Duration
+	err    error
+	closed bool
+}
+
+func (b *delayedResponseBody) Read(p []byte) (int, error) {
+	if b.delay > 0 {
+		time.Sleep(b.delay)
+		b.delay = 0
+	}
+	if b.err != nil {
+		return 0, b.err
+	}
+	return b.reader.Read(p)
+}
+
+func (b *delayedResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestHTTPDurationIncludesReadingBody(t *testing.T) {
+	const delay = 30 * time.Millisecond
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"complete response", nil},
+		{"failed body read", io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &delayedResponseBody{reader: strings.NewReader("payload"), delay: delay, err: tc.err}
+			client := &HTTPClient{
+				config: &config.Config{Timeout: time.Second},
+				client: httpx.NewHttpClient(&http.Client{Transport: durationRoundTripper(
+					func(req *http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: req}, nil
+					})}),
+			}
+			resp, err := client.Send(context.Background(), &types.Request{URL: "http://example.test/", Method: http.MethodGet})
+			require.NotNil(t, resp)
+			assert.GreaterOrEqual(t, resp.Duration, delay, "耗时必须包含响应体读取，包括读取失败的等待")
+			assert.True(t, body.closed)
+			if tc.err != nil {
+				assert.ErrorIs(t, err, tc.err)
+				assert.ErrorIs(t, resp.Error, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "payload", string(resp.Body))
+			pass, err := verify.NewHTTPVerifier(&config.VerifyConfig{Type: types.VerifyTypeResponseTime, Expect: 10}).Verify(resp)
+			assert.False(t, pass, "慢响应体必须触发耗时断言失败")
+			assert.Error(t, err)
+		})
+	}
 }
