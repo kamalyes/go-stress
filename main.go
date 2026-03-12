@@ -56,6 +56,7 @@ var (
 	jmxFile     string // JMeter .jmx 脚本路径
 	jmxDump     string // 把转换结果导出为 go-stress 原生 YAML 的路径
 	jmxLossy    bool   // 允许 .jmx 中存在会改变负载的丢失项
+	jmxExport   string // 把当前配置导出为 JMeter .jmx 脚本的路径
 	protocol    string
 	concurrency uint64
 	requests    uint64
@@ -147,6 +148,7 @@ func init() {
 	flag.StringVar(&jmxFile, "jmx", "", "JMeter 脚本路径 (.jmx)")
 	flag.StringVar(&jmxDump, "jmx-dump", "", "把 .jmx 转换为 go-stress 原生 YAML 并写入该路径（只转换不压测）")
 	flag.BoolVar(&jmxLossy, "jmx-allow-lossy", false, "即使 .jmx 中存在会改变施加负载的元素也继续导入")
+	flag.StringVar(&jmxExport, "jmx-export", "", "把当前配置导出为 JMeter 脚本 (.jmx) 并写入该路径（只转换不压测）")
 	flag.StringVar(&protocol, "protocol", "http", "协议类型 (http/grpc/websocket)")
 	flag.Uint64Var(&concurrency, "c", 1, "并发数")
 	flag.Uint64Var(&requests, "n", 1, "每个并发的请求数")
@@ -268,6 +270,14 @@ func run() {
 	if jmxDump != "" {
 		if err := dumpJMeterPlan(); err != nil {
 			logger.Default.Fatalf("❌ 转换 JMeter 脚本失败: %v", err)
+		}
+		return
+	}
+
+	// -jmx-export 反方向：把 go-stress 配置导出成 .jmx，同样只转换不压测
+	if jmxExport != "" {
+		if err := exportJMeterPlan(); err != nil {
+			logger.Default.Fatalf("❌ 导出 JMeter 脚本失败: %v", err)
 		}
 		return
 	}
@@ -545,6 +555,74 @@ func dumpJMeterPlan() error {
 
 	fmt.Printf("\n✅ 已导出 go-stress 配置: %s\n", jmxDump)
 	return nil
+}
+
+// exportJMeterPlan 把当前配置导出为 JMeter .jmx 脚本
+//
+// 与 -jmx-dump 互为反向：那边是 JMeter → go-stress，这边是 go-stress → JMeter。
+// 两个方向都是有损的，且丢失的内容不同，故都要把转换报告打出来
+//
+// 配置来源与压测时完全一致（-config / -curl / -jmx / 命令行参数），
+// 这样「导出的脚本」与「真正会发的压力」出自同一份配置，不会各走各的
+func exportJMeterPlan() error {
+	cfg, err := resolveExportConfig()
+	if err != nil {
+		return err
+	}
+
+	data, report, err := config.ExportJMeterPlan(cfg)
+	// 报告先打，无论导出成功与否
+	if report != nil {
+		fmt.Println()
+		fmt.Print(report)
+	}
+	if err != nil {
+		return err
+	}
+	if report != nil && report.HasFatal() && !jmxLossy {
+		return fmt.Errorf("有 %d 处配置在 JMeter 里没有等价物且会改变施加的负载，"+
+			"导出的脚本跑出来的不是同一个压力模型；"+
+			"确认可接受差异后加 -jmx-allow-lossy 继续", len(report.FatalDrops()))
+	}
+
+	if err := os.WriteFile(jmxExport, data, 0o644); err != nil {
+		return fmt.Errorf("写入 %s 失败: %w", jmxExport, err)
+	}
+
+	fmt.Printf("\n✅ 已导出 JMeter 脚本: %s\n", jmxExport)
+	return nil
+}
+
+// resolveExportConfig 取要导出的配置
+//
+// 复用压测时那套来源判定，而不是另起一套：导出与压测读同一份配置，
+// 才谈得上「导出的脚本等价于这次压测」
+func resolveExportConfig() (*config.Config, error) {
+	switch {
+	case jmxFile != "":
+		cfg, report, err := config.LoadJMeterPlan(jmxFile, jmxLossy)
+		if report != nil {
+			fmt.Println()
+			fmt.Print(report)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return cfg, nil
+	case configFile != "":
+		return config.NewLoader().WithLogger(logger.Default).LoadFromFile(configFile)
+	case curlFile != "":
+		data, err := os.ReadFile(curlFile)
+		if err != nil {
+			return nil, fmt.Errorf("读取 curl 文件失败: %w", err)
+		}
+		return config.NewCurlParser(string(data), logger.Default)
+	default:
+		if url == "" {
+			return nil, fmt.Errorf("-jmx-export 需要配置来源：用 -config / -curl / -jmx 指定，或至少给出 -url")
+		}
+		return buildConfigFromFlags(), nil
+	}
 }
 
 // parseHeader 解析请求头字符串

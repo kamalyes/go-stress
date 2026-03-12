@@ -213,7 +213,7 @@ go build -o go-stress .
 | **定速压测** `-qps` | 不限速时压力随系统响应速度波动，容量规划与 SLO 验证必须固定到达率 | [负载形态](docs/LOAD_PROFILE.md) |
 | **思考时间** `think_time` | 闭环负载贴近真实用户行为，与「全速打」的开环负载对同一服务相差一个数量级 | [负载形态](docs/LOAD_PROFILE.md) |
 | **CSV 数据驱动** | 一万次请求都打同一账号，服务端的缓存、唯一索引、限流会把结果全面带偏 | [负载形态](docs/LOAD_PROFILE.md) |
-| **JMeter 迁移** `.jmx` | 存量脚本直接跑或转原生 YAML，转换报告逐项列明有损项 | [JMeter 导入](docs/JMETER_IMPORT.md) |
+| **JMeter 互转** `.jmx` | 存量脚本直接跑或转原生 YAML，也能把配置反向导出为 `.jmx`；两个方向都逐项列明有损项 | [JMeter 互转](docs/JMETER_IMPORT.md) |
 | **分布式压测** | 单机打满网卡与 CPU 前，先到调度上限；跨机房按区域调度 Slave | [分布式模式](docs/DISTRIBUTED_MODE.md) |
 
 ## 📊 指标口径
@@ -274,7 +274,7 @@ envsubst < deploy/workerpool.yaml   | kubectl apply -f -
 | [配置文件](docs/CONFIG_FILE.md) | YAML / JSON 全部字段与取值 |
 | [负载形态](docs/LOAD_PROFILE.md) | 定速、思考时间、渐进启动、CSV 数据驱动 |
 | [变量函数](docs/VARIABLES.md) | 78 个内置函数：随机值、时间、加密、字符串 |
-| [JMeter 导入](docs/JMETER_IMPORT.md) | `.jmx` 脚本导入、元素映射表、转换报告 |
+| [JMeter 互转](docs/JMETER_IMPORT.md) | `.jmx` 与配置双向转换、元素映射表、转换报告 |
 | [链路追踪](docs/TRACING.md) | 每请求 trace-id、与被压服务日志对齐 |
 | [存储适配器](docs/STORAGE_ADAPTERS.md) | memory / sqlite / badger 的取舍 |
 | [存储与报告](docs/STORAGE_REPORT.md) | 报告产物、实时监控、指标口径 |

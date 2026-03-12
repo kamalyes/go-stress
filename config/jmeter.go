@@ -295,6 +295,19 @@ type jmxConverter struct {
 	// paramVars CounterConfig/RandomVariableConfig 定义的参数化变量名 →
 	// go-stress 动态变量函数，引用处直接替换
 	paramVars map[string]string
+
+	// timeouts 脚本里出现过的超时设定
+	//
+	// JMeter 的超时既可以写在 HTTP 请求默认值里，也可以逐个写在采样器上
+	// （HTTP Request 界面上就有 Connect/Response Timeout 两个输入框），
+	// 而 go-stress 只有一个全局 timeout。先全部收集，最后统一取舍
+	timeouts []jmxTimeout
+}
+
+// jmxTimeout 一处超时设定及其来源
+type jmxTimeout struct {
+	source string
+	d      time.Duration
 }
 
 // convert 从根 hashTree 转换出配置
@@ -325,6 +338,9 @@ func (c *jmxConverter) convert(root *jmxNode) (*Config, error) {
 	if len(cfg.APIs) == 0 {
 		return nil, fmt.Errorf("脚本中没有启用的 HTTP 采样器（HTTPSamplerProxy），没有可发的请求")
 	}
+
+	// 超时统一取舍：采样器与 HTTP 请求默认值都可能带超时
+	c.resolveTimeout(cfg)
 
 	// 把采样器串成依赖链，使它们按脚本顺序逐个执行
 	//
@@ -614,6 +630,10 @@ func (c *jmxConverter) buildAPI(n, tree *jmxNode, groupHeaders map[string]string
 			}
 		}
 	}
+
+	// 采样器自身的超时同样登记为候选：JMeter 的 HTTP Request 界面上就有
+	// Connect/Response Timeout，逐个采样器填写比写在默认值里更常见
+	c.readTimeout(n, fmt.Sprintf("采样器「%s」", n.label()))
 
 	rawURL, err := c.samplerURL(n)
 	if err != nil {
@@ -1147,6 +1167,62 @@ func (c *jmxConverter) readRegexExtractor(n *jmxNode) *ExtractorConfig {
 	}
 }
 
+// readTimeout 从元素上读超时并登记为候选，返回登记的时长（0 表示没有）
+//
+// go-stress 的 Timeout 是整个请求的截止时间，而 JMeter 把连接与等待响应
+// 分成两个值，最坏情况是两者之和，故按和登记
+func (c *jmxConverter) readTimeout(n *jmxNode, source string) time.Duration {
+	connect := time.Duration(n.propInt("HTTPSampler.connect_timeout", 0)) * time.Millisecond
+	response := time.Duration(n.propInt("HTTPSampler.response_timeout", 0)) * time.Millisecond
+	total := connect + response
+	if total <= 0 {
+		return 0
+	}
+
+	// 两项都填了才需要解释：go-stress 没有独立的连接超时，
+	// 按「连接 + 等待」之和折算成整体截止时间
+	if connect > 0 && response > 0 {
+		c.report.drop(JMXDropWarn, n.tag(), n.label(),
+			fmt.Sprintf("连接超时 %s 与响应超时 %s 没有各自独立的配置项，"+
+				"已按两者之和 %s 并入请求整体超时 —— 只取响应超时会让"+
+				"「连接慢但各自未超限」的请求被提前判失败", connect, response, total))
+	}
+
+	c.timeouts = append(c.timeouts, jmxTimeout{source: source, d: total})
+	return total
+}
+
+// resolveTimeout 把收集到的多处超时归并成一个全局 timeout
+//
+// 取最大值而非最小：取最小会让本来允许跑更久的请求被提前判超时，
+// 凭空制造失败，而失败计数是压测结论里最敏感的那个数
+func (c *jmxConverter) resolveTimeout(cfg *Config) {
+	if len(c.timeouts) == 0 {
+		return
+	}
+
+	max := c.timeouts[0]
+	differ := false
+	for _, t := range c.timeouts[1:] {
+		if t.d != max.d {
+			differ = true
+		}
+		if t.d > max.d {
+			max = t
+		}
+	}
+
+	cfg.Timeout = max.d
+	if differ {
+		c.report.drop(JMXDropWarn, "timeout", "",
+			fmt.Sprintf("脚本里有 %d 处不同的超时设定，而 go-stress 只有一个全局 timeout；"+
+				"已取最大的 %s（来自%s）—— 取最小会让本可跑更久的请求被提前判超时",
+				len(c.timeouts), max.d, max.source))
+	} else {
+		c.report.addMapped("超时 %s → timeout", max.d)
+	}
+}
+
 // dropUnknown 记录一个未支持的元素，并按其是否影响负载定级
 func (c *jmxConverter) dropUnknown(n *jmxNode) {
 	tag := n.tag()
@@ -1364,14 +1440,9 @@ func (c *jmxConverter) applyHTTPDefaults(n *jmxNode, cfg *Config) {
 		parts = append(parts, "port="+v)
 	}
 
-	// 响应超时映射为请求超时；连接超时没有独立配置项
-	if ms := n.propInt("HTTPSampler.response_timeout", 0); ms > 0 {
-		cfg.Timeout = time.Duration(ms) * time.Millisecond
-		parts = append(parts, "timeout="+cfg.Timeout.String())
-	}
-	if ms := n.propInt("HTTPSampler.connect_timeout", 0); ms > 0 {
-		c.report.drop(JMXDropWarn, n.tag(), n.label(),
-			fmt.Sprintf("连接超时 %dms 没有独立配置项，已并入请求整体超时", ms))
+	// 超时登记为候选，由 resolveTimeout 统一取舍
+	if d := c.readTimeout(n, "HTTP 请求默认值"); d > 0 {
+		parts = append(parts, "timeout="+d.String())
 	}
 
 	c.report.addMapped("HTTP 请求默认值「%s」→ %s", n.label(), strings.Join(parts, " "))

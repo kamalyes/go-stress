@@ -317,7 +317,13 @@ func TestLoadJMeterPlanHTTPDefaults(t *testing.T) {
 
 	assert.Equal(t, "https://api.internal:9443/v2/items", cfg.URL,
 		"只填 path 的采样器应从默认值取到 protocol/domain/port")
-	assert.Equal(t, 5*time.Second, cfg.Timeout, "response_timeout 应映射为请求超时")
+	// 连接 2s + 响应 5s = 7s
+	//
+	// 不是只取响应超时：JMeter 的两个超时各管一段，连接 1.9s 后再等 4.9s
+	// 在 JMeter 里不算超时，而 go-stress 只有一个整体截止时间，
+	// 按 5s 算会把这种请求判成失败 —— 凭空多出来的失败数是最误导人的
+	assert.Equal(t, 7*time.Second, cfg.Timeout,
+		"连接超时与响应超时之和应映射为请求整体超时")
 
 	t.Run("吞吐量定时器映射为目标速率", func(t *testing.T) {
 		require.NotNil(t, cfg.Advanced)
@@ -325,8 +331,10 @@ func TestLoadJMeterPlanHTTPDefaults(t *testing.T) {
 		assert.InDelta(t, 20.0, cfg.Advanced.TargetQPS, 0.01)
 	})
 
-	t.Run("连接超时如实报告为未完整导入", func(t *testing.T) {
-		assert.Contains(t, report.String(), "连接超时")
+	t.Run("连接超时的折算方式如实说明", func(t *testing.T) {
+		text := report.String()
+		assert.Contains(t, text, "连接超时")
+		assert.Contains(t, text, "两者之和", "必须说清是怎么折算的")
 	})
 }
 

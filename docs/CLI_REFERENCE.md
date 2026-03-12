@@ -10,7 +10,7 @@
 
 | 参数 | 类型 | 默认值 | 说明 |
 |:-----|:-----|:-------|:-----|
-| `-jmx` | string | - | JMeter 脚本路径（.jmx），见 [JMeter 导入](JMETER_IMPORT.md) |
+| `-jmx` | string | - | JMeter 脚本路径（.jmx），见 [JMeter 互转](JMETER_IMPORT.md) |
 | `-curl` | string | - | curl 命令文件路径 |
 | `-config` | string | - | 配置文件路径（yaml/json），见 [配置文件](CONFIG_FILE.md) |
 | 命令行参数 | - | - | 以上都未给出时，由 `-url` 等参数直接构建 |
@@ -102,15 +102,26 @@ go-stress -url https://api.example.com -trace-capture "x-biz-trace,x-trace-id"
 
 存储模式的取舍见 [存储适配器](STORAGE_ADAPTERS.md)
 
-## 🧩 JMeter 导入
+## 🧩 JMeter 互转
 
 | 参数 | 类型 | 默认值 | 说明 |
 |:-----|:-----|:-------|:-----|
 | `-jmx` | string | - | JMeter 脚本路径 |
 | `-jmx-dump` | string | - | 把脚本转换为 go-stress 原生 YAML 写入该路径，**只转换不压测** |
-| `-jmx-allow-lossy` | bool | `false` | 即使存在会改变施加负载的元素也继续导入 |
+| `-jmx-export` | string | - | 把当前配置导出为 JMeter 脚本写入该路径，**只转换不压测** |
+| `-jmx-allow-lossy` | bool | `false` | 即使存在会改变施加负载的元素也继续转换（两个方向都适用） |
 
-默认遇到会改变负载模型的元素（限速定时器、逻辑控制器、脚本处理器等）即报错退出并逐条列明原因，详见 [JMeter 导入](JMETER_IMPORT.md)
+导入时默认遇到会改变负载模型的元素（限速定时器、逻辑控制器、脚本处理器等）即报错退出并逐条列明原因
+
+导出时的配置来源与压测完全一致：
+
+```bash
+go-stress -config plan.yaml -jmx-export plan.jmx   # 从 YAML
+go-stress -curl req.txt     -jmx-export plan.jmx   # 从 curl
+go-stress -url https://x -c 50 -n 100 -jmx-export plan.jmx   # 从命令行参数
+```
+
+两个方向的丢失项不同（各自有对方没有的能力），完整对照表见 [JMeter 互转](JMETER_IMPORT.md)
 
 ## 🌐 分布式参数
 

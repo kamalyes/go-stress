@@ -1,16 +1,21 @@
-# JMeter 脚本导入
+# JMeter 脚本互转
 
-把现有 `.jmx` 脚本转成 go-stress 配置，免去照着 GUI 一项项重敲
+`.jmx` 与 go-stress 配置双向转换，两边都免去照着界面一项项重敲
 
 ```bash
-# 直接跑
+# JMeter → go-stress：直接跑
 go-stress -jmx plan.jmx
 
-# 转成原生 YAML，便于审阅、手工调整、纳入版本管理
+# JMeter → go-stress：转成原生 YAML，便于审阅、手工调整、纳入版本管理
 go-stress -jmx plan.jmx -jmx-dump plan.yaml
+
+# go-stress → JMeter：把配置导出成 .jmx，交给只用 JMeter 的同事
+go-stress -config plan.yaml -jmx-export plan.jmx
 ```
 
-`-jmx-dump` **只转换不压测** — 导出是一次性的配置迁移动作，与真正发压混在一条命令里容易误触
+三个参数**都只转换不压测** — 转换是一次性的迁移动作，与真正发压混在一条命令里容易误触
+
+`-jmx-export` 的配置来源与压测时完全一致（`-config` / `-curl` / `-jmx` / 命令行参数），这样「导出的脚本」与「真正会发的压力」出自同一份配置，不会各走各的
 
 ## ⚠️ 先读这一节
 
@@ -238,3 +243,67 @@ JMeter 的采样器在每轮循环里**全部按序执行**，而 go-stress 在�
 ```
 
 `-jmx-dump` 导出的 YAML 开头带转换说明注释，提醒对照报告确认差异后再用于压测
+
+## 🔁 反方向：导出为 JMeter 脚本
+
+```bash
+go-stress -config plan.yaml -jmx-export plan.jmx
+```
+
+导出同样会打转换报告，并且**丢失项与导入方向不同** —— 两个工具各有对方没有的能力：
+
+| go-stress 的配置 | 导出结果 |
+|:-----------------|:---------|
+| `concurrency` / `requests` / `duration` / `ramp_up` | ThreadGroup（时长模式下写 `scheduler=true`，循环次数写 -1，与 JMeter 的取舍一致） |
+| `target_qps` | ConstantThroughputTimer，速率 ×60 写成「每分钟」，`calcMode=1`（组内共享） |
+| `headers` | HeaderManager；各接口共有且同值的头只在组级写一份 |
+| `think_time` | ConstantTimer / UniformRandomTimer / GaussianRandomTimer |
+| `csv_data` | CSVDataSet，相对路径会解析成绝对路径 |
+| `timeout` | 每个采样器的 `HTTPSampler.response_timeout` |
+| `apis[]` | 逐个 HTTPSamplerProxy，按配置顺序排列 |
+| `verify` | ResponseAssertion / JSONPathAssertion / DurationAssertion / SizeAssertion |
+| `extractors` | JSONPostProcessor / RegexExtractor |
+| `{{.var}}`、内置函数 | `${var}`、`${__UUID()}` 等（见下表） |
+
+**没有对应物、会被报出来的：**
+
+| 配置项 | 原因 |
+|:-------|:-----|
+| `protocol: grpc` / `websocket` | `.jmx` 只覆盖 HTTP 采样器（定为 FATAL，默认拒绝导出） |
+| `advanced.enable_breaker` | 熔断器是 go-stress 独有的 |
+| `advanced.enable_retry` | 失败重试没有对应元素 |
+| `depends_on` | 依赖关系靠采样器顺序表达，但 JMeter 没有「依赖失败则跳过」的语义，前置失败时后续仍会发出 |
+| `extractors` 里的 `HEADER` / `EXPRESSION` | 没有直接对应的后置处理器 |
+| `verify` 里 JSON_SCHEMA、EMAIL、UUID 等 | 没有对应断言 |
+
+CSV 的相对路径会在导出时解析成绝对路径：导入侧是按 `.jmx` 所在目录解析相对路径的，原样写回相对路径的话，脚本一旦另存到别的目录，CSV 就指到不存在的位置 —— 而 JMeter 只在运行时才报找不到文件
+
+### 来回转换是收敛的
+
+第一轮导出与第二轮往往不同：导入侧会按 JMeter 的作用域规则把组级的请求头与定时器下发给每个采样器，这是既定语义;但**从第二轮起脚本不再变化**
+
+```bash
+go-stress -config a.yaml       -jmx-export r1.jmx
+go-stress -jmx r1.jmx          -jmx-dump   b.yaml
+go-stress -config b.yaml       -jmx-export r2.jmx
+go-stress -jmx r2.jmx          -jmx-dump   c.yaml
+go-stress -config c.yaml       -jmx-export r3.jmx
+diff r2.jmx r3.jmx   # 无差异
+```
+
+这条性质由 `TestRoundTripConverges` 守着 —— 不收敛的话，使用者每次在两个工具间同步都会看到一堆与自己无关的结构改动，久而久之就不敢再信任这个转换
+
+### 动态变量函数的双向翻译
+
+| go-stress | JMeter |
+|:----------|:-------|
+| `{{uuid}}` | `${__UUID()}` |
+| `{{timestamp}}` | `${__time()}` |
+| `{{unix}}` | `${__time(/1000)}` |
+| `{{randomInt a b}}` | `${__Random(a,b)}` |
+| `{{randomString n}}` | `${__RandomString(n)}` |
+| `{{seq}}` | `${__counter(FALSE)}` |
+
+只收录语义等价项;go-stress 独有的函数（`randomEmail` 等）在 JMeter 里没有对应物，会原样留在脚本里 —— JMeter 不会求值，需要手工替换
+
+> 本机未安装 JMeter，因此「JMeter 能否打开导出的脚本」没有实测过;能做的最强检查是结构不变量：`.jmx` 的层级靠「元素 + 紧随其后的兄弟 `hashTree`」表达，缺了配对节点 JMeter 加载时会把元素错挂到别的父节点下 —— `TestExportStructuralInvariants` 逐层校验了这一点，也校验了每个元素都带 `testclass` 属性
