@@ -150,8 +150,14 @@ func NewWorker(cfg WorkerConfig, varResolver *config.VariableResolver) *Worker {
 
 // Run 运行Worker
 func (w *Worker) Run(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// 建立连接
 	if err := w.client.Connect(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		w.logger.Errorf("❌ Worker %d: 连接失败: %v", w.id, err)
 		return err
 	}
@@ -183,8 +189,8 @@ func (w *Worker) Run(ctx context.Context) error {
 		}
 
 		// 检查控制状态
-		if w.checkControlState() {
-			return nil
+		if w.checkControlState(ctx) {
+			return ctx.Err()
 		}
 
 		// 每次新的请求序列，重置本地依赖上下文（原地清空，不重新分配）
@@ -207,8 +213,8 @@ func (w *Worker) Run(ctx context.Context) error {
 		if isDependencyMode && len(executionOrder) > 0 {
 			for _, apiName := range executionOrder {
 				// 检查控制状态
-				if w.checkControlState() {
-					return nil
+				if w.checkControlState(ctx) {
+					return ctx.Err()
 				}
 
 				// 获取 API 配置以检查重复次数
@@ -224,8 +230,8 @@ func (w *Worker) Run(ctx context.Context) error {
 				// 执行指定次数
 				for r := 0; r < repeatCount; r++ {
 					// 检查控制状态
-					if w.checkControlState() {
-						return nil
+					if w.checkControlState(ctx) {
+						return ctx.Err()
 					}
 
 					// 每次执行使用不同的 groupID（对于重复执行的API）
@@ -266,11 +272,11 @@ func (w *Worker) thinkTimeFor(api *APIConfig) *config.ThinkTimeConfig {
 }
 
 // checkControlState 检查控制状态（停止/暂停）返回 true 表示应该退出
-func (w *Worker) checkControlState() bool {
+func (w *Worker) checkControlState(ctx context.Context) bool {
 	if w.controller.IsStopped() {
 		return true
 	}
-	return WaitWhilePaused(w.controller)
+	return WaitWhilePausedContext(ctx, w.controller)
 }
 
 // executeRequestUnified 统一的请求执行方法（消除重复代码）

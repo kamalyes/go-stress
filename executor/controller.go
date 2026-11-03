@@ -10,7 +10,10 @@
  */
 package executor
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Controller 压测控制器接口
 type Controller interface {
@@ -28,6 +31,14 @@ func (n *NoOpController) IsStopped() bool { return false }
 
 // WaitWhilePaused 等待直到不再暂停或停止
 func WaitWhilePaused(ctrl Controller) bool {
+	return WaitWhilePausedContext(context.Background(), ctrl)
+}
+
+// WaitWhilePausedContext 暂停等待也必须响应任务取消。
+func WaitWhilePausedContext(ctx context.Context, ctrl Controller) bool {
+	if ctx.Err() != nil {
+		return true
+	}
 	if ctrl == nil {
 		return false
 	}
@@ -36,7 +47,13 @@ func WaitWhilePaused(ctrl Controller) bool {
 		if ctrl.IsStopped() {
 			return true // 已停止
 		}
-		time.Sleep(100 * time.Millisecond)
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return true
+		case <-timer.C:
+		}
 	}
 
 	return ctrl.IsStopped()

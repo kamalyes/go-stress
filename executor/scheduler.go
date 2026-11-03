@@ -107,11 +107,25 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	go s.progress.Start(progressCtx)
 
 	// 启动workers
+	launchStart := time.Now()
+launchLoop:
 	for i := uint64(0); i < s.workerCount; i++ {
-		// 渐进式启动
+		if ctx.Err() != nil {
+			break
+		}
+		// 按统一起点分配启动时间，避免每轮累加等待放大 ramp_up。
 		if s.rampUpDuration > 0 {
-			delay := time.Duration(float64(s.rampUpDuration) / float64(s.workerCount) * float64(i))
-			time.Sleep(delay)
+			offset := time.Duration(float64(s.rampUpDuration) / float64(s.workerCount) * float64(i))
+			timer := time.NewTimer(time.Until(launchStart.Add(offset)))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				break launchLoop
+			case <-timer.C:
+			}
+		}
+		if ctx.Err() != nil {
+			break
 		}
 
 		wg.Add(1)
@@ -135,6 +149,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	cancelProgress()
 	s.progress.Complete()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// 检查是否有错误
 	for err := range errChan {
 		if err != nil {
@@ -147,6 +165,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 // runWorker 运行单个worker
 func (s *Scheduler) runWorker(ctx context.Context, workerID uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// 从连接池获取客户端
 	client, err := s.clientPool.Get()
 	if err != nil {

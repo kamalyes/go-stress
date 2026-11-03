@@ -118,6 +118,10 @@ func (c *WebSocketClient) Send(ctx context.Context, req *Request) (*Response, er
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	startTime := time.Now()
 
 	// 确保连接已建立
@@ -147,9 +151,20 @@ func (c *WebSocketClient) Send(ctx context.Context, req *Request) (*Response, er
 	// 而整个 Send 全程持有 c.mu，那个 Worker 就彻底卡死，-timeout 对 WebSocket
 	// 形同虚设（与此前 HTTP 那条路径同类的问题）
 	//
-	// 注意这是「上界」而非「即时取消」：ctx 被取消时已发出的读仍会等到截止时间。
-	// 要做到即时取消得在另一个 goroutine 里关掉连接，而那意味着每个请求多一个
-	// goroutine，对热路径不划算
+	// context.AfterFunc 仅在取消时运行回调，通过关闭当前连接中断阻塞读写。
+	conn := c.conn
+	cancelDone := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(cancelDone)
+	})
+	defer func() {
+		if !stopCancel() {
+			<-cancelDone
+			c.dropConn()
+		}
+	}()
+
 	deadline := c.deadline(ctx)
 	if err := c.conn.SetWriteDeadline(deadline); err != nil {
 		c.dropConn()
@@ -163,12 +178,19 @@ func (c *WebSocketClient) Send(ctx context.Context, req *Request) (*Response, er
 	if err := c.conn.WriteMessage(messageType, []byte(req.Body)); err != nil {
 		// 连接断开,关闭并返回错误
 		c.dropConn()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("websocket write failed: %w", err)
 	}
 
 	// 接收响应
 	_, respBody, err := c.conn.ReadMessage()
 	if err != nil {
+		if ctx.Err() != nil {
+			c.dropConn()
+			return nil, ctx.Err()
+		}
 		// 只有优雅关闭才算正常：1000 NormalClosure、1001 GoingAway 都是对端
 		// 按协议发了关闭帧。而 1006 AbnormalClosure 表示连接没有关闭帧就断了
 		// （对端崩溃、中间设备掐断），那是故障而非正常收尾

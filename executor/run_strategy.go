@@ -60,12 +60,21 @@ func (s *StandaloneStrategy) PrepareContext(baseCtx context.Context) (context.Co
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		s.logger.Warn("⚠️  收到中断信号，正在停止...")
-		cancel()
+		defer signal.Stop(sigCh)
+		select {
+		case <-sigCh:
+			// 恢复默认信号处理：再次 Ctrl+C 可直接结束进程。
+			signal.Stop(sigCh)
+			s.logger.Warn("⚠️  收到中断信号，正在停止...再次按 Ctrl+C 强制退出")
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 
-	return ctx, cancel, sigCh
+	return ctx, func() {
+		signal.Stop(sigCh)
+		cancel()
+	}, sigCh
 }
 
 // AfterExecution 独立模式的后处理（打印报告、保存文件）
@@ -89,7 +98,7 @@ func (s *StandaloneStrategy) AfterExecution(exec *Executor, report *statistics.R
 // WaitForExit 独立模式的等待退出
 func (s *StandaloneStrategy) WaitForExit(exec *Executor, sigCh chan os.Signal, ctx context.Context) {
 	if !s.noWait {
-		waitForExit(exec, sigCh, ctx, s.logger)
+		waitForExit(exec, ctx, s.logger)
 	}
 }
 

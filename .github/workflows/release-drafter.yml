@@ -5,9 +5,15 @@ on:
         # branches to consider in the event; optional, defaults to all
         branches:
             - master
+    workflow_dispatch:
 
 jobs:
     update_release_draft:
+        # 创建或更新 Release 草稿需要 contents 写权限，收集变更需要读取 PR。
+        # 其他工作流中的 permissions 不会继承到本工作流。
+        permissions:
+            contents: write
+            pull-requests: read
         runs-on: ubuntu-latest
         steps:
             # (Optional) GitHub Enterprise requires GHE_HOST variable set
@@ -17,9 +23,8 @@ jobs:
 
             # Drafts your next Release notes as Pull Requests are merged into "master"
             - uses: release-drafter/release-drafter@v6
-                # (Optional) specify config name to use, relative to .github/. Default: release-drafter.yml
-                # with:
-                #   config-name: my-config.yml
-                #   disable-autolabeler: true
+              with:
+                  # 标签由 auto-labeler.yml 管理，这里只维护 Release 草稿。
+                  disable-autolabeler: true
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

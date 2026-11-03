@@ -466,7 +466,7 @@ func fileURL(path string) string {
 }
 
 // waitForExit 等待退出
-func waitForExit(exec *Executor, sigCh chan os.Signal, ctx context.Context, log logger.ILogger) {
+func waitForExit(exec *Executor, ctx context.Context, log logger.ILogger) {
 	// 实时报告服务器可能被 advanced.disable_realtime 关掉，或启动失败。
 	// 此前无条件宣称「服务器仍在运行」并给出地址，关掉它时就会自相矛盾
 	if realtimeServer := exec.GetRealtimeServer(); realtimeServer != nil {
@@ -478,10 +478,6 @@ func waitForExit(exec *Executor, sigCh chan os.Signal, ctx context.Context, log 
 	}
 	log.Info("   按 Ctrl+C 退出程序")
 
-	select {
-	case <-sigCh:
-		log.Info("👋 程序已退出")
-	case <-ctx.Done():
-		log.Info("👋 程序已退出")
-	}
+	<-ctx.Done()
+	log.Info("👋 程序已退出")
 }

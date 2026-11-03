@@ -26,21 +26,21 @@ go run ./testserver
 go run ./testserver
 
 # 2️⃣ 运行压测（另一个终端，在项目根目录）
-# 快速测试（5并发 20请求）
+# 快速测试（5并发，每并发20次，共100次）
 go-stress -config testserver/websocket-quick.yaml
 
-# 通用 WebSocket 服务（10并发 100请求）
+# 通用 WebSocket 服务（10并发，每并发100次，共1000次）
 go-stress -config testserver/websocket-test.yaml
 
-# 回声服务（20并发 500请求）
+# 回声服务（20并发，每并发500次，共10000次）
 go-stress -config testserver/websocket-echo.yaml
 
-# 聊天室压测（50并发 1000请求）
+# 聊天室压测（50并发，每并发1000次，共50000次）
 go-stress -config testserver/websocket-chat.yaml
 
-# 命令行方式（-c 是并发数，-n 是总请求数）
+# 命令行方式（-c 是并发数，-n 是每个并发的请求数，共1000次）
 go-stress -protocol websocket -url ws://localhost:3000/ws \
-  -body '{"action":"ping","message_id":1}' -c 10 -n 100
+  -data '{"action":"ping","message_id":1}' -c 10 -n 100
 ```
 
 > ⚠️ **注意**：加载配置文件用 `-config` 参数。`-c` 是并发数（整数），
@@ -208,12 +208,12 @@ go-stress -config testserver/ticket-and-send.yaml
 
 ### 3. websocket-*.yaml - WebSocket 压测
 
-| 文件 | 并发 | 请求数 | 端点 |
-|------|------|--------|------|
-| `websocket-quick.yaml` | 5 | 20 | `/ws` |
-| `websocket-test.yaml` | 10 | 100 | `/ws` |
-| `websocket-echo.yaml` | 20 | 500 | `/ws/echo` |
-| `websocket-chat.yaml` | 50 | 1000 | `/ws/chat` |
+| 文件 | 并发 | 每并发请求数 | 总请求数 | 端点 |
+|------|------|--------------|----------|------|
+| `websocket-quick.yaml` | 5 | 20 | 100 | `/ws` |
+| `websocket-test.yaml` | 10 | 100 | 1000 | `/ws` |
+| `websocket-echo.yaml` | 20 | 500 | 10000 | `/ws/echo` |
+| `websocket-chat.yaml` | 50 | 1000 | 50000 | `/ws/chat` |
 
 **运行**（在项目根目录）：
 
@@ -260,7 +260,20 @@ go-stress -config testserver/websocket-chat.yaml
 ### 3. 查看实时监控
 
 运行压测时会输出实时监控地址（默认端口 8088，配置文件中的
-`realtime_port` 可修改），在浏览器打开即可看到实时 QPS / 延迟 / 状态码分布。
+`advanced.realtime_port` 可修改），在浏览器打开即可看到实时 QPS / 延迟 / 状态码分布。
+
+压测结束后，进程默认继续提供报告页面，直到按 Ctrl+C 退出。如果之前的 health
+压测还占用 8088，新任务无法在相同端口提供报告；继续访问 8088 看到的仍是旧报告。
+请先在旧终端按 Ctrl+C，再运行下一份配置；同时保留多个报告时，为各份配置设置不同的
+`advanced.realtime_port`。用 `lsof -nP -iTCP:8088 -sTCP:LISTEN` 可检查端口占用
+
+第一次 Ctrl+C 会取消启动等待、请求及暂停等待，保存当前报告后退出；再次 Ctrl+C
+会直接终止进程。`advanced.ramp_up` 是所有 Worker 的渐进启动窗口，例如 50 并发配
+`ramp_up: 10s`，应约每 200ms 启动一个 Worker，取消后不再继续启动。
+
+只需生成文件报告、结束即退出时，加 `-no-wait`。修改源码后需要重新构建安装的
+`go-stress`，或在项目根目录用 `go run . -config testserver/websocket-quick.yaml`
+直接运行当前源码
 
 ### 4. 查看测试报告
 

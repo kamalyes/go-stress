@@ -127,6 +127,42 @@ func TestWebSocketCtxDeadlineTakesPrecedence(t *testing.T) {
 		"ctx 截止时间更早时应以它为准，实际耗时 %s", elapsed)
 }
 
+// TestWebSocketCancelInterruptsRead 长超时下主动取消也应立即中断读响应。
+func TestWebSocketCancelInterruptsRead(t *testing.T) {
+	received := make(chan struct{})
+	url := wsServer(t, func(conn *websocket.Conn) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+		close(received)
+		// 等客户端断开，不发响应。
+		_, _, _ = conn.ReadMessage()
+	})
+	c := wsClient(t, url, 30*time.Second)
+	require.NoError(t, c.Connect(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Send(ctx, &types.Request{Body: "hello"})
+		done <- err
+	}()
+	select {
+	case <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("服务端未收到请求")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("取消后仍在等待 WebSocket 响应")
+	}
+	// 取消导致旧连接被丢弃，后续任务可重新连接。
+	require.NoError(t, c.Connect(context.Background()))
+}
+
 // TestWebSocketAbnormalCloseIsFailure 异常关闭（1006）必须算失败
 //
 // 回归用：此前把 CloseAbnormalClosure 与优雅关闭一并当作成功并返回 200，

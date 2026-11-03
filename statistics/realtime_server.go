@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -83,9 +84,16 @@ func (s *RealtimeServer) Start() error {
 		Handler: mux,
 	}
 
+	// 先同步绑定端口，失败时交给调用方处理，避免打开其他压测进程的旧报告
+	listener, err := net.Listen("tcp", s.server.Addr)
+	if err != nil {
+		return fmt.Errorf("监听实时报告端口 %d 失败: %w；请退出旧压测进程，或修改 advanced.realtime_port", s.port, err)
+	}
+	s.port = listener.Addr().(*net.TCPAddr).Port
+	s.logger.Info("🌐 实时报告服务器启动: http://localhost:%d", s.port)
+
 	go func() {
-		s.logger.Info("🌐 实时报告服务器启动: http://localhost:%d", s.port)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			s.logger.Errorf("实时报告服务器错误: %v", err)
 		}
 	}()
