@@ -94,7 +94,8 @@ func (r *JMXReport) String() string {
 		fmt.Fprintf(&b, " (JMeter %s)", r.JMeterVersion)
 	}
 	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", 60) + "\n")
+	b.WriteString(strings.Repeat("─", 60))
+	b.WriteString("\n")
 
 	for _, m := range r.Mapped {
 		fmt.Fprintf(&b, "  ✓ %s\n", m)
