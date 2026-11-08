@@ -12,6 +12,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -337,6 +338,45 @@ func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource
 
 	// 执行请求（通过中间件链）
 	resp, err := w.handler(ctx, req)
+
+	// 轮次自己结束时，在途的那条请求不是失败
+	//
+	// 时长模式把 Duration 实现为 context.WithTimeout（executor.go 里那一处），在途请求
+	// 继承这个 ctx，于是时间一到，每个 Worker 手上正在飞的那条请求都会以
+	// context deadline exceeded 返回 —— 原先它们被当成真失败：
+	//   - 每轮固定多出「并发数」条失败记录，成功率被无谓压低
+	//   - Errors 里多出一条 context deadline exceeded，而真正的请求超时
+	//     （cfg.Timeout）长得一模一样，两者就此分辨不出来
+	//   - handleVerificationAndErrors 还会按失败处理，把依赖它的 API 标记为跳过，
+	//     并打出一行 ERROR —— 并发 8 就是轮次末尾齐刷刷 8 行
+	// 对压测台尤其要命：驱动必须能区分「被压对象真的失败了」和「这一轮结束了」，
+	// 否则每轮都带着几条失败，真失败反而不显眼
+	//
+	// 判据用 ctx.Err() 而不是错误本身：请求级超时走的是 handler 内部的子 context，
+	// 那时本轮 ctx 仍然活着，只有轮次结束才会让 ctx.Err() 非空。
+	// 同时要求错误确实是 context 取消/到期，免得轮次末尾恰好发生的真错误被一并丢掉
+	//
+	// 与上面 limiter.Wait 的处理一致：轮次结束后直接返回，不记任何东西
+	//
+	// [EN] An in-flight request is not a failure when the round itself ends. Duration mode is
+	// implemented as context.WithTimeout, which in-flight requests inherit, so when the time is
+	// up every worker's current request returns context deadline exceeded. Those used to be
+	// recorded as genuine failures: a fixed "concurrency" worth of failed records every round,
+	// a needlessly lowered success rate, a context-deadline-exceeded entry in Errors that is
+	// indistinguishable from a real per-request timeout, plus the dependency-skip cascade and
+	// one ERROR line per worker at the end of each round. For a load-testing harness this
+	// matters most of all: the driver must separate "the subject really failed" from "the round
+	// ended", or every round carries a few failures and real ones stop standing out.
+	//
+	// The discriminator is ctx.Err() rather than the error itself: a per-request timeout uses a
+	// child context inside the handler while this round's ctx is still alive, and only the end
+	// of the round makes ctx.Err() non-nil. The error must also really be a context
+	// cancellation, so that a genuine error happening at the very end is not dropped with it.
+	// Same treatment as limiter.Wait above: return without recording anything
+	if err != nil && ctx.Err() != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return
+	}
 
 	// 先提取变量（无论验证是否通过都提取）
 	var extractedVars map[string]string
