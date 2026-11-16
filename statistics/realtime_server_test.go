@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"syscall"
 	"testing"
 	"time"
 
@@ -43,7 +42,9 @@ func TestRealtimeServerPortConflict(t *testing.T) {
 	server := NewRealtimeServer(newTestCollector(), port, logger.NewEmptyLogger())
 	defer server.Stop()
 	err = server.Start()
-	require.ErrorIs(t, err, syscall.EADDRINUSE)
+	var listenErr *net.OpError
+	require.ErrorAs(t, err, &listenErr)
+	require.Equal(t, "listen", listenErr.Op)
 	require.ErrorContains(t, err, "advanced.realtime_port")
 
 	resp, err := old.Client().Get("http://localhost:" + strconv.Itoa(port))
