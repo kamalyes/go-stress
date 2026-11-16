@@ -40,11 +40,9 @@ jobs:
         run: go install gotest.tools/gotestsum@v1.13.0 # 指定版本
       - name: Test
         run: gotestsum -f testname -- ./... -race -count=1 -shuffle=on
-        continue-on-error: true
 
       - name: Test
         run: gotestsum -f testname -- ./... -race -count=1 -coverprofile=coverage.txt -covermode=atomic -shuffle=on
-        continue-on-error: true
       - name: Upload coverage reports to Codecov
         if: ${{ matrix.platform == 'ubuntu-latest' && matrix.go-version == '1.26.x' }}
         uses: codecov/codecov-action@v4.5.0
