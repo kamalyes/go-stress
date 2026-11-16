@@ -22,7 +22,7 @@ jobs:
         # 原先写 [1.21.x, 1.22.x] 时每个任务都在偷偷下载 1.26 工具链再编，
         # 矩阵声称测了 1.21/1.22，实际跑的全是 1.26
         go-version: [1.26.x]
-        platform: [ubuntu-latest, windows-latest, macos-latest, macos-14]
+        platform: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Fetch Repository
