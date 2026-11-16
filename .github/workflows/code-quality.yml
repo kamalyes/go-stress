@@ -42,7 +42,6 @@ jobs:
 
       - name: 🧪 Test with Coverage
         run: gotestsum -f testname -- ./... -race -count=1 -coverprofile=coverage -covermode=atomic -shuffle=on
-        continue-on-error: true
 
       - name: 📊 Generate Coverage Report
         if: always()

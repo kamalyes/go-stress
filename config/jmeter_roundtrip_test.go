@@ -340,9 +340,10 @@ func TestRoundTripThinkTime(t *testing.T) {
 func TestRoundTripCSVDataSet(t *testing.T) {
 	for _, sharing := range []CSVSharing{CSVSharingAll, CSVSharingWorker} {
 		recycle := false
+		path := filepath.Join(t.TempDir(), "users.csv")
 		cfg := baseCfg()
 		cfg.CSVData = &CSVDataConfig{
-			Path:            "/tmp/users.csv",
+			Path:            path,
 			Variables:       []string{"username", "password"},
 			Delimiter:       ";",
 			Recycle:         &recycle,
@@ -353,7 +354,7 @@ func TestRoundTripCSVDataSet(t *testing.T) {
 		back, _, _ := roundTrip(t, cfg)
 		require.NotNil(t, back.CSVData, "sharing=%s", sharing)
 
-		assert.Equal(t, "/tmp/users.csv", back.CSVData.Path)
+		assert.Equal(t, path, back.CSVData.Path)
 		assert.Equal(t, []string{"username", "password"}, back.CSVData.Variables)
 		assert.Equal(t, ";", back.CSVData.Delimiter)
 		require.NotNil(t, back.CSVData.Recycle)

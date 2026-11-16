@@ -12,6 +12,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -337,6 +338,12 @@ func (w *Worker) executeRequestUnified(ctx context.Context, source RequestSource
 
 	// 执行请求（通过中间件链）
 	resp, err := w.handler(ctx, req)
+
+	// 轮次结束导致的在途请求取消不应记为失败；请求级超时仍由存活的轮次 context 区分。
+	if err != nil && ctx.Err() != nil &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return
+	}
 
 	// 先提取变量（无论验证是否通过都提取）
 	var extractedVars map[string]string
